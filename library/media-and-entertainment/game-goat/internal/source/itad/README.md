@@ -11,6 +11,7 @@ Sibling source-client module for game-goat-pp-cli's price commands
 | `GET /games/search/v1?title=<t>&results=<n>` | title → game id | array of `{id,slug,title,type,mature}` |
 | `POST /games/prices/v3?country=<CC>&capacity=<n>&deals=<bool>` | current deals + all/1y/3m lows | array of `{id,historyLow:{all,y1,m3},deals:[{shop,price,regular,cut,storeLow,timestamp,expiry,url}]}` |
 | `GET /games/history/v2?id=<uuid>&country=<CC>&since=<ts>` | dated price-change log | array of `{timestamp,shop,deal:{price,regular,cut}}` |
+| `GET /games/info/v2?id=<uuid>` | id → game title (bare-id resolution) | object `{id,slug,title,type,mature,...}` |
 
 ## Currency localisation
 
@@ -22,7 +23,7 @@ surfaced in the command meta.
 
 ## API surface
 
-- `itad.go` — typed client: `Search`, `Prices`, `History`,
+- `itad.go` — typed client: `Search`, `Info`, `Prices`, `History`,
   `ResolveGame` (exact-title, game-typed ranking with ambiguity candidates),
   `SortDealsByPrice`, and sentinel errors `ErrMissingAPIKey` /
   `ErrGameNotFound` plus `IsAuthError` / `IsNotFound` status mapping.

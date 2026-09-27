@@ -74,6 +74,7 @@ func TestPriceVerdict(t *testing.T) {
 		want    string
 	}{
 		{"no current", nil, "no current price"},
+		{"free now", &priceDealRow{Amount: 0}, "free right now"},
 		{"at low", &priceDealRow{Amount: 5}, "at historical low — cheapest it has ever been"},
 		{"near", &priceDealRow{Amount: 5.4}, "near historical low (within 10%)"},
 	}
@@ -84,6 +85,9 @@ func TestPriceVerdict(t *testing.T) {
 	}
 	if got := priceVerdict(&priceDealRow{Amount: 5}, nil); got != "no historical low recorded" {
 		t.Fatalf("no low: got %q", got)
+	}
+	if got := priceVerdict(&priceDealRow{Amount: 5}, &priceLowRow{Amount: 0}); got != "above historical low (previously free)" {
+		t.Fatalf("previously free: got %q", got)
 	}
 	if got := priceVerdict(&priceDealRow{Amount: 10}, all); got[:6] != "above " {
 		t.Fatalf("above low: got %q", got)
@@ -182,5 +186,23 @@ func TestFormatMoney(t *testing.T) {
 	}
 	if got := formatMoney(9.5, ""); got != "9.50" {
 		t.Fatalf("formatMoney no currency = %q", got)
+	}
+}
+
+func TestBuildLowRowsKeepsFreeZero(t *testing.T) {
+	rows := buildLowRows(itad.HistoryLow{All: &itad.Money{Amount: 0, Currency: "USD"}})
+	if len(rows) != 1 || rows[0].Amount != 0 || rows[0].Currency != "USD" {
+		t.Fatalf("a zero low is a free price and must be kept: %+v", rows)
+	}
+}
+
+func TestBuildChangesSortsByInstantNotText(t *testing.T) {
+	entries := []itad.HistoryEntry{
+		{Timestamp: "2024-01-01T01:00:00+01:00"}, // 00:00 UTC — older, text-sorts later
+		{Timestamp: "2024-01-01T00:30:00+00:00"}, // 00:30 UTC — newer
+	}
+	rows := buildChanges(entries, 10)
+	if len(rows) != 2 || rows[0].At != "2024-01-01T00:30:00+00:00" {
+		t.Fatalf("changes must sort by instant, not text: %+v", rows)
 	}
 }

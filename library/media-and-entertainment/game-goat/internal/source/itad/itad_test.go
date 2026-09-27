@@ -163,7 +163,7 @@ func TestResolveGamePrefersExactGameTypedMatch(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	game, candidates, err := ResolveGame(context.Background(), c, "Hades", 20)
+	game, candidates, _, err := ResolveGame(context.Background(), c, "Hades", 20)
 	if err != nil {
 		t.Fatalf("ResolveGame: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestResolveGameAmbiguousReturnsCandidates(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	_, candidates, err := ResolveGame(context.Background(), c, "doom", 20)
+	_, candidates, _, err := ResolveGame(context.Background(), c, "doom", 20)
 	if err != nil {
 		t.Fatalf("ResolveGame: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestResolveGameEmptyIsNotFound(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	_, _, err := ResolveGame(context.Background(), c, "nothing", 20)
+	_, _, _, err := ResolveGame(context.Background(), c, "nothing", 20)
 	if !errors.Is(err, ErrGameNotFound) {
 		t.Fatalf("err = %v, want ErrGameNotFound", err)
 	}
@@ -270,5 +270,56 @@ func TestNormalizeHelpers(t *testing.T) {
 	}
 	if got := normalizeTitle("  DOOM: Eternal™ "); got != "doom eternal" {
 		t.Fatalf("normalizeTitle = %q", got)
+	}
+}
+
+func TestResolveGameFuzzyFallbackIsInexact(t *testing.T) {
+	const body = `[{"id":"a","title":"Hades II","type":"game"}]`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	game, _, exact, err := ResolveGame(context.Background(), c, "Hades", 20)
+	if err != nil {
+		t.Fatalf("ResolveGame: %v", err)
+	}
+	if exact {
+		t.Fatal("a fuzzy fallback must report exact=false so the caller can warn")
+	}
+	if game.ID != "a" {
+		t.Fatalf("fallback game = %q", game.ID)
+	}
+}
+
+func TestInfoReturnsGameTitle(t *testing.T) {
+	var gotID string
+	const body = `{"id":"g1","slug":"hades","title":"Hades","type":"game"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotID = r.URL.Query().Get("id")
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	game, err := c.Info(context.Background(), "g1")
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	if gotID != "g1" || game.ID != "g1" || game.Title != "Hades" {
+		t.Fatalf("info id=%q game=%+v", gotID, game)
+	}
+}
+
+func TestInfoEmptyIsNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	if _, err := c.Info(context.Background(), "missing"); !errors.Is(err, ErrGameNotFound) {
+		t.Fatalf("err = %v, want ErrGameNotFound", err)
 	}
 }

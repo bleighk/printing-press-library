@@ -181,9 +181,16 @@ func classifyITADError(err error) error {
 // returns the ambiguity candidates, and reports how it resolved.
 func resolveITADGame(ctx context.Context, cmd *cobra.Command, c *itad.Client, title string) (itad.Game, []itadCandidate, string, error) {
 	if id, ok := parseITADID(title); ok {
-		return itad.Game{ID: id}, nil, "id", nil
+		game, err := c.Info(ctx, id)
+		if err != nil {
+			if errors.Is(err, itad.ErrGameNotFound) || itad.IsNotFound(err) {
+				return itad.Game{}, nil, "", notFoundErr(fmt.Errorf("no IsThereAnyDeal game with id %s", id))
+			}
+			return itad.Game{}, nil, "", classifyITADError(err)
+		}
+		return game, nil, "id", nil
 	}
-	game, candidates, err := itad.ResolveGame(ctx, c, title, 20)
+	game, candidates, exact, err := itad.ResolveGame(ctx, c, title, 20)
 	if err != nil {
 		if errors.Is(err, itad.ErrGameNotFound) {
 			return itad.Game{}, nil, "", notFoundErr(fmt.Errorf("no game titled %q in IsThereAnyDeal; try a fuller title or 'game-goat-pp-cli games search'", title))
@@ -197,6 +204,9 @@ func resolveITADGame(ctx context.Context, cmd *cobra.Command, c *itad.Client, ti
 			ambiguous = append(ambiguous, itadCandidate{ID: g.ID, Title: g.Title, Type: g.Type})
 		}
 		fmt.Fprintf(cmd.ErrOrStderr(), "matched %d games titled %q; using %s — pass an ITAD id to pin another\n", len(candidates), game.Title, game.ID)
+	}
+	if !exact {
+		fmt.Fprintf(cmd.ErrOrStderr(), "no exact title match for %q; using %q (%s) — pass an ITAD id to pin the exact game\n", title, game.Title, game.ID)
 	}
 	return game, ambiguous, "title", nil
 }
@@ -224,9 +234,10 @@ func dealRow(d itad.Deal) priceDealRow {
 }
 
 func lowRow(window string, m *itad.Money) (priceLowRow, bool) {
-	if m == nil || m.Amount <= 0 {
+	if m == nil {
 		return priceLowRow{}, false
 	}
+	// A zero amount is a real price of "free", not missing data; only nil is absent.
 	return priceLowRow{Window: window, Amount: m.Amount, Currency: m.Currency}, true
 }
 
@@ -258,7 +269,22 @@ func buildChanges(entries []itad.HistoryEntry, limit int) []priceChangeRow {
 		}
 		rows = append(rows, row)
 	}
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].At > rows[j].At })
+	sort.SliceStable(rows, func(i, j int) bool {
+		ti, oki := parseITADTime(rows[i].At)
+		tj, okj := parseITADTime(rows[j].At)
+		switch {
+		case oki && okj:
+			if ti.Equal(tj) {
+				return false
+			}
+			return ti.After(tj)
+		case oki != okj:
+			// Parseable timestamps always sort before unparseable ones.
+			return oki
+		default:
+			return rows[i].At > rows[j].At
+		}
+	})
 	if limit > 0 && len(rows) > limit {
 		rows = rows[:limit]
 	}
@@ -292,13 +318,29 @@ func lowestWindow(rows []priceLowRow, window string) *priceLowRow {
 	return nil
 }
 
-// priceVerdict compares the current best price against the all-time low.
+// parseITADTime parses an ITAD RFC3339 timestamp. ok is false for an
+// unparseable value, which sorts last.
+func parseITADTime(value string) (time.Time, bool) {
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
+// priceVerdict compares the current best price against the all-time low. A zero
+// amount is a free price, not missing data.
 func priceVerdict(current *priceDealRow, allTime *priceLowRow) string {
-	if current == nil || current.Amount <= 0 {
+	if current == nil {
 		return "no current price"
 	}
-	if allTime == nil || allTime.Amount <= 0 {
+	if current.Amount <= 0 {
+		return "free right now"
+	}
+	if allTime == nil {
 		return "no historical low recorded"
+	}
+	if allTime.Amount <= 0 {
+		return "above historical low (previously free)"
 	}
 	switch {
 	case current.Amount <= allTime.Amount*1.0001:

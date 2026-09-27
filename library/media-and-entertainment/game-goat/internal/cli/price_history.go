@@ -37,7 +37,9 @@ func buildPriceHistoryView(game itad.Game, resolvedBy, country, since string, am
 	lows := buildLowRows(hl)
 	ordered := itad.SortDealsByPrice(deals)
 	var current *priceDealRow
-	if len(ordered) > 0 {
+	// Only a deal with an actual price becomes "current"; a nil price is
+	// missing data, not a free game.
+	if len(ordered) > 0 && ordered[0].Price != nil {
 		row := dealRow(ordered[0])
 		current = &row
 	}

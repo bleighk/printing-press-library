@@ -265,21 +265,46 @@ func (c *Client) History(ctx context.Context, id, since string) ([]HistoryEntry,
 	return entries, nil
 }
 
-// ResolveGame maps a title to one ITAD game. Exact normalized-title matches of
-// type "game" win over DLC/soundtracks and fuzzy hits; when several exact
-// "game" matches exist (remakes sharing a name) the best-ranked one is
-// returned alongside the full candidate set so the caller can warn and let the
-// user pin an ITAD id. Pure ranking: the only I/O is the search call.
-func ResolveGame(ctx context.Context, c *Client, title string, results int) (Game, []Game, error) {
+// Info loads a game's basic record by ITAD id via /games/info/v2. Used by the
+// commands' bare-id path so meta.game is populated instead of empty.
+func (c *Client) Info(ctx context.Context, id string) (Game, error) {
+	if err := c.requireKey(); err != nil {
+		return Game{}, err
+	}
+	q := url.Values{}
+	q.Set("id", id)
+	body, err := c.doer.get(ctx, c.BaseURL+"/games/info/v2?"+q.Encode(), c.headers())
+	if err != nil {
+		return Game{}, err
+	}
+	var game Game
+	if err := json.Unmarshal(body, &game); err != nil {
+		return Game{}, fmt.Errorf("parsing ITAD info response: %w", err)
+	}
+	if game.ID == "" && game.Title == "" {
+		return Game{}, ErrGameNotFound
+	}
+	return game, nil
+}
+
+// ResolveGame maps a title to one ITAD game and reports whether the match was
+// exact. Exact normalized-title matches of type "game" win over DLC/soundtracks
+// and fuzzy hits; when several exact "game" matches exist (remakes sharing a
+// name) the best-ranked one is returned alongside the full candidate set so the
+// caller can warn and let the user pin an ITAD id. When no exact match exists
+// the first game-typed hit is returned with exact=false so the caller can warn
+// instead of silently substituting a different game. Pure ranking: the only I/O
+// is the search call.
+func ResolveGame(ctx context.Context, c *Client, title string, results int) (Game, []Game, bool, error) {
 	if results <= 0 {
 		results = 20
 	}
 	games, err := c.Search(ctx, title, results)
 	if err != nil {
-		return Game{}, nil, err
+		return Game{}, nil, false, err
 	}
 	if len(games) == 0 {
-		return Game{}, nil, ErrGameNotFound
+		return Game{}, nil, false, ErrGameNotFound
 	}
 
 	want := normalizeTitle(title)
@@ -290,16 +315,17 @@ func ResolveGame(ctx context.Context, c *Client, title string, results int) (Gam
 		}
 	}
 	if len(exactGames) > 0 {
-		return exactGames[0], exactGames, nil
+		return exactGames[0], exactGames, true, nil
 	}
 
 	// No exact title: prefer the best-ranked game-typed hit, then any hit.
+	// exact=false tells the caller to warn — this fallback is a guess.
 	for _, g := range games {
 		if strings.EqualFold(g.Type, "game") {
-			return g, nil, nil
+			return g, nil, false, nil
 		}
 	}
-	return games[0], nil, nil
+	return games[0], nil, false, nil
 }
 
 // SortDealsByPrice orders deals cheapest-first. Deals without a price sort
