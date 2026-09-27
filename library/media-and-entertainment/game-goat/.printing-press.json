@@ -66,6 +66,16 @@
       "name": "",
       "command": "moods list",
       "description": "List the curated mood names that tonight --mood accepts, with their genre/tag clusters."
+    },
+    {
+      "name": "",
+      "command": "price-history",
+      "description": "Historical price tracking for one game: all-time / 1-year / 3-month lows, the current best storefront price, a dated change log, and a buy-now verdict, localised to a --country currency (needs ITAD_API_KEY)."
+    },
+    {
+      "name": "",
+      "command": "prices",
+      "description": "Current prices across storefronts, cheapest first, with a --deals-only filter and the all-time low for context, localised to a --country currency (needs ITAD_API_KEY)."
     }
   ],
   "verify": {
