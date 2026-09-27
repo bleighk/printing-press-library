@@ -12,7 +12,7 @@
     "type": "api_key",
     "api_key_available": true
   },
-  "source_fingerprint": "aa148eda0d1dba174493a1e25e0e877cee69a978872b0d5182f3386b60ed87cd",
+  "source_fingerprint": "64fd4bba6e42c9590f17715612200bae39e668619a7aeceacffb3d5905ce51bc",
   "source_files": {
     "cmd/game-goat-pp-cli/main.go": "a1394013e76344175a16455d2f884e83a74a3ca8e439115de29ff0454d88096d",
     "cmd/game-goat-pp-mcp/http_auth_test.go": "b92729242beb3fc93d02bf4b8f939a033e39ec05e715cdae8431b7577f5152be",
@@ -110,7 +110,8 @@
     "internal/cli/root.go": "6e43ed5f859ec49dfcceaebf92ae191dac6f2d4336477d2bbb05f819b252f1dc",
     "internal/cli/root_test.go": "de35336b4bffdb00e944711f905be37ebb36935724d31d130b43a94df2725229",
     "internal/cli/search.go": "9805001da51464c55265f1702b065d3956a6b8409015678066139b24bcade092",
-    "internal/cli/series.go": "1c397c4a11933abf0fe3456d09d887db43e5e7c9b921c65050bc3551573a0acc",
+    "internal/cli/series.go": "c526880587167a5c7e7cb8dac269d53133b155d1ddfd202ec7c6b4c5cac43273",
+    "internal/cli/series_anchor_test.go": "24aa7df0f2253312303679dafbe8e8a9e626fc86e4f4c9b80176c9007e3ea5b2",
     "internal/cli/similar.go": "e41ddef96b6ecb25e103027d94243ea060ce0109fa683950e73c6dd4d560f573",
     "internal/cli/similar_test.go": "d153c5d9885a1b5bb1fa94d4de1f179c7f310c6ea4de22f51ae8a8e37e6619d2",
     "internal/cli/stores.go": "7f40d158366d9325734cf55c1de4389d7ad7018b21da2a22fc6f21079db0ed65",
