@@ -232,6 +232,15 @@ func resolveITADGame(ctx context.Context, cmd *cobra.Command, c *itad.Client, ti
 		fmt.Fprintf(cmd.ErrOrStderr(), "matched %d games titled %q; using %s — pass an ITAD id to pin another\n", len(candidates), game.Title, game.ID)
 	}
 	if !exact {
+		// A non-exact hit is only a safe substitute when it continues the query
+		// at a word boundary (e.g. "the witcher 3" -> "The Witcher 3: Wild
+		// Hunt"). Otherwise the top search hit can be an unrelated game, so
+		// report not-found and let the caller pass an id or a fuller title
+		// rather than showing another game's prices.
+		// PATCH(amend-2026-09-28: ITAD fuzzy fallback requires a continuation)
+		if !isFranchiseContinuation(title, game.Title) {
+			return itad.Game{}, nil, "", notFoundErr(fmt.Errorf("no game titled %q (or a word-boundary continuation of it) in IsThereAnyDeal; closest match was %q — try a fuller title or pass an ITAD id", title, game.Title))
+		}
 		fmt.Fprintf(cmd.ErrOrStderr(), "no exact title match for %q; using %q (%s) — pass an ITAD id to pin the exact game\n", title, game.Title, game.ID)
 	}
 	return game, ambiguous, "title", nil

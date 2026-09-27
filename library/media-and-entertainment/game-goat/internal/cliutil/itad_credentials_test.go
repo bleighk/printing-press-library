@@ -2,6 +2,8 @@ package cliutil
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -81,5 +83,38 @@ func TestClearITADCredentialOnlyFieldRemovesFile(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("credentials file should be removed, stat err = %v", err)
+	}
+}
+
+// TestSaveITADRefusesRefusedCredentialsFile proves an unreadable (over-permissive)
+// credentials file is never overwritten: doing so would silently discard the
+// credential it holds instead of asking the user to fix its permissions.
+func TestSaveITADRefusesRefusedCredentialsFile(t *testing.T) {
+	restore, err := SetHomeOverride(t.TempDir())
+	if err != nil {
+		t.Fatalf("SetHomeOverride: %v", err)
+	}
+	defer restore()
+
+	path, err := CredentialsFilePath()
+	if err != nil {
+		t.Fatalf("CredentialsFilePath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("api_key = \"rawg-secret\"\n"), 0o644); err != nil {
+		t.Fatalf("seed world-readable credentials: %v", err)
+	}
+
+	if err := SaveITADCredential("itad-secret"); err == nil {
+		t.Fatal("SaveITADCredential must refuse a world-readable credentials file, not overwrite it")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read credentials: %v", err)
+	}
+	if !strings.Contains(string(data), "rawg-secret") {
+		t.Fatalf("refused file was overwritten and its credential lost: %q", string(data))
 	}
 }

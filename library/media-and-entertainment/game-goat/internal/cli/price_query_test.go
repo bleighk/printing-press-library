@@ -196,6 +196,25 @@ func TestBuildLowRowsKeepsFreeZero(t *testing.T) {
 	}
 }
 
+// TestITADFallbackRequiresContinuation documents the guard that keeps a bogus
+// title from resolving to an unrelated game: a non-exact ITAD hit is only
+// accepted when it continues the query at a word boundary.
+func TestITADFallbackRequiresContinuation(t *testing.T) {
+	cases := []struct {
+		query, candidate string
+		want             bool
+	}{
+		{"the witcher 3", "The Witcher 3: Wild Hunt", true},
+		{"__printing_press_invalid__", "19th-century Printing Press Experience VR", false},
+		{"elden ringg", "Elden Ring", false},
+	}
+	for _, tc := range cases {
+		if got := isFranchiseContinuation(tc.query, tc.candidate); got != tc.want {
+			t.Fatalf("isFranchiseContinuation(%q, %q) = %v, want %v", tc.query, tc.candidate, got, tc.want)
+		}
+	}
+}
+
 func TestBuildChangesSortsByInstantNotText(t *testing.T) {
 	entries := []itad.HistoryEntry{
 		{Timestamp: "2024-01-01T01:00:00+01:00"}, // 00:00 UTC — older, text-sorts later

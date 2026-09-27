@@ -326,9 +326,15 @@ func LoadITADCredential() (string, bool, error) {
 // LoadITADCredentialForConfig is LoadITADCredential pinned to an explicit
 // --config sibling credentials file.
 func LoadITADCredentialForConfig(configPath string) (string, bool, error) {
-	creds, ok, err := loadCredentialsForRead(configPath)
-	if err != nil || !ok || creds == nil {
+	creds, status, err := loadCredentialsForReadWithStatus(configPath)
+	if err != nil {
 		return "", false, err
+	}
+	if status.Refusal != nil {
+		return "", false, *status.Refusal
+	}
+	if creds == nil {
+		return "", false, nil
 	}
 	key := strings.TrimSpace(creds.ITADApiKey)
 	return key, key != "", nil
@@ -374,17 +380,29 @@ func ClearITADCredentialForConfig(configPath string) error {
 	return saveCredentialsForConfig(configPath, creds)
 }
 
-func loadCredentialsForRead(configPath string) (*Credentials, bool, error) {
+func loadCredentialsForReadWithStatus(configPath string) (*Credentials, CredentialLoadStatus, error) {
 	if strings.TrimSpace(configPath) != "" {
-		return LoadCredentialsForConfig(configPath)
+		return LoadCredentialsForConfigWithStatus(configPath)
 	}
-	return LoadCredentials()
+	return LoadCredentialsWithStatus()
+}
+
+func loadCredentialsForRead(configPath string) (*Credentials, bool, error) {
+	creds, status, err := loadCredentialsForReadWithStatus(configPath)
+	return creds, status.Loaded, err
 }
 
 func loadCredentialsForWrite(configPath string) (*Credentials, error) {
-	creds, _, err := loadCredentialsForRead(configPath)
+	creds, status, err := loadCredentialsForReadWithStatus(configPath)
 	if err != nil {
 		return nil, err
+	}
+	// PATCH(amend-2026-09-28: never overwrite a refused credentials file)
+	// A file refused for unsafe permissions is present but unread; writing a
+	// fresh one would silently discard the credentials it holds instead of
+	// asking the user to fix the permissions.
+	if status.Refusal != nil {
+		return nil, *status.Refusal
 	}
 	if creds == nil {
 		creds = &Credentials{}

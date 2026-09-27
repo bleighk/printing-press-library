@@ -40,6 +40,8 @@ type Config struct {
 	envOverrides     map[string]bool `toml:"-"`
 	fileConfig       *Config         `toml:"-"`
 	RawgApiKey       string          `toml:"api_key"`
+	// PATCH(amend-2026-09-28: carry the ITAD key so RAWG saves/logout preserve it)
+	ITADApiKey string `toml:"itad_api_key"`
 }
 
 func Load(configPath string) (*Config, error) {
@@ -167,6 +169,14 @@ func Load(configPath string) (*Config, error) {
 		cfg.markEnvOverride("RawgApiKey")
 		cfg.AuthSource = "env:RAWG_API_KEY"
 		cfg.CredentialSource = "env:RAWG_API_KEY"
+	}
+	// PATCH(amend-2026-09-28: load the sibling ITAD credential)
+	// Deliberately does not touch AuthSource/AuthHeader: the ITAD key is a
+	// separate provider's credential and must not make the RAWG auth look
+	// configured.
+	if v := cliutil.EnvOverride("ITAD_API_KEY"); v != "" {
+		cfg.ITADApiKey = v
+		cfg.markEnvOverride("ITADApiKey")
 	}
 	// Label config-file-derived credentials so doctor can distinguish
 	// "credentials persisted on disk" from "no credentials at all" — without
@@ -410,6 +420,7 @@ func (c *Config) credentials() *cliutil.Credentials {
 		ClientID:      c.ClientID,
 		ClientSecret:  c.ClientSecret,
 		RawgApiKey:    c.RawgApiKey,
+		ITADApiKey:    c.ITADApiKey,
 	}
 }
 
@@ -437,6 +448,10 @@ func (c *Config) applyCredentials(creds *cliutil.Credentials) {
 	}
 	if c.RawgApiKey == "" {
 		c.RawgApiKey = creds.RawgApiKey
+	}
+	// PATCH(amend-2026-09-28: merge the sibling ITAD credential)
+	if c.ITADApiKey == "" {
+		c.ITADApiKey = creds.ITADApiKey
 	}
 }
 
@@ -648,6 +663,16 @@ func (c *Config) ClearTokens() error {
 		// back; returning early would leave the secrets on disk.
 		return c.save()
 	}
+	// PATCH(amend-2026-09-28: logout keeps a sibling ITAD credential)
+	// Removing the shared file would silently drop the IsThereAnyDeal key when
+	// only the RAWG credential is being cleared, so rewrite it instead.
+	if persisted := c.configForSave(); persisted.ITADApiKey != "" {
+		if err := cliutil.SaveCredentials(persisted.credentials()); err != nil {
+			return err
+		}
+		c.CredentialSource = "credentials file"
+		return c.save()
+	}
 	if err := cliutil.RemoveCredentials(); err != nil {
 		return err
 	}
@@ -692,6 +717,10 @@ func (c *Config) configForSave() Config {
 		if c.envOverrides["RawgApiKey"] {
 			out.RawgApiKey = c.fileConfig.RawgApiKey
 		}
+		// An env-derived ITAD key must not be persisted to disk by a save.
+		if c.envOverrides["ITADApiKey"] {
+			out.ITADApiKey = c.fileConfig.ITADApiKey
+		}
 	}
 	out.envOverrides = nil
 	out.fileConfig = nil
@@ -717,6 +746,8 @@ func (c *Config) updateFileConfigField(field string) {
 		c.fileConfig.ClientSecret = c.ClientSecret
 	case "RawgApiKey":
 		c.fileConfig.RawgApiKey = c.RawgApiKey
+	case "ITADApiKey":
+		c.fileConfig.ITADApiKey = c.ITADApiKey
 	}
 }
 

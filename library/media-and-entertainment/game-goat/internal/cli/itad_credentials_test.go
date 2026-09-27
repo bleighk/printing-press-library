@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mvanhorn/printing-press-library/library/media-and-entertainment/game-goat/internal/cliutil"
+	"github.com/mvanhorn/printing-press-library/library/media-and-entertainment/game-goat/internal/config"
 )
 
 // TestResolveITADKeyPrecedence proves the stored credential is used when no env
@@ -74,5 +75,74 @@ func TestNewITADClientMissingKeyGuidance(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "auth set-token --provider itad") {
 		t.Fatalf("error should name the stored-credential path, got: %v", err)
+	}
+}
+
+// TestRawgSavePreservesStoredITADKey guards the shared-file contract: saving
+// the primary RAWG key must not drop a stored IsThereAnyDeal key.
+func TestRawgSavePreservesStoredITADKey(t *testing.T) {
+	restore, err := cliutil.SetHomeOverride(t.TempDir())
+	if err != nil {
+		t.Fatalf("SetHomeOverride: %v", err)
+	}
+	defer restore()
+	t.Setenv("ITAD_API_KEY", "")
+
+	if err := cliutil.SaveITADCredential("itad-secret"); err != nil {
+		t.Fatalf("SaveITADCredential: %v", err)
+	}
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if err := cfg.SaveCredential("rawg-secret"); err != nil {
+		t.Fatalf("SaveCredential: %v", err)
+	}
+
+	creds, ok, err := cliutil.LoadCredentials()
+	if err != nil || !ok {
+		t.Fatalf("LoadCredentials: ok=%v err=%v", ok, err)
+	}
+	if creds.RawgApiKey != "rawg-secret" {
+		t.Fatalf("RAWG key = %q, want rawg-secret", creds.RawgApiKey)
+	}
+	if creds.ITADApiKey != "itad-secret" {
+		t.Fatalf("ITAD key = %q, want itad-secret (RAWG save must not drop it)", creds.ITADApiKey)
+	}
+}
+
+// TestRawgLogoutPreservesStoredITADKey guards that clearing the RAWG credential
+// rewrites the shared file instead of deleting a sibling ITAD key.
+func TestRawgLogoutPreservesStoredITADKey(t *testing.T) {
+	restore, err := cliutil.SetHomeOverride(t.TempDir())
+	if err != nil {
+		t.Fatalf("SetHomeOverride: %v", err)
+	}
+	defer restore()
+	t.Setenv("ITAD_API_KEY", "")
+
+	if err := cliutil.SaveCredentials(&cliutil.Credentials{RawgApiKey: "rawg-secret", ITADApiKey: "itad-secret"}); err != nil {
+		t.Fatalf("SaveCredentials: %v", err)
+	}
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if err := cfg.ClearTokens(); err != nil {
+		t.Fatalf("ClearTokens: %v", err)
+	}
+
+	creds, ok, err := cliutil.LoadCredentials()
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+	if !ok {
+		t.Fatal("credentials file should remain for the stored ITAD key")
+	}
+	if creds.RawgApiKey != "" {
+		t.Fatalf("RAWG key was not cleared: %q", creds.RawgApiKey)
+	}
+	if creds.ITADApiKey != "itad-secret" {
+		t.Fatalf("ITAD key = %q, want itad-secret (RAWG logout must not drop it)", creds.ITADApiKey)
 	}
 }
