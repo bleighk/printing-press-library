@@ -251,6 +251,19 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 				}
 			}
 
+			// PATCH(amend-2026-09-28: doctor reports the optional ITAD credential)
+			itadSource := ""
+			if strings.TrimSpace(cliutil.EnvOverride("ITAD_API_KEY")) != "" {
+				itadSource = "env:ITAD_API_KEY"
+			} else if _, ok, _ := cliutil.LoadITADCredentialForConfig(flags.configPath); ok {
+				itadSource = "credentials file"
+			}
+			if itadSource != "" {
+				report["itad_auth"] = "configured (" + itadSource + ")"
+			} else {
+				report["itad_auth"] = "optional: not set — prices/price-history need ITAD_API_KEY"
+			}
+
 			// Check auth environment variables
 			authEnvSet := []string{}
 			authEnvRequiredMissing := []string{}
@@ -431,7 +444,7 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 				fmt.Fprintf(w, "  %s %s: %s\n", indicator, ck.label, s)
 			}
 			// Print info keys without status indicator
-			for _, key := range []string{"config_path", "base_url", "auth_source", "auth_refusals", "credentials_location", "version"} {
+			for _, key := range []string{"config_path", "base_url", "auth_source", "auth_refusals", "itad_auth", "credentials_location", "version"} {
 				if v, ok := report[key]; ok {
 					fmt.Fprintf(w, "  %s: %v\n", key, v)
 				}
@@ -636,6 +649,7 @@ var doctorInfoKeys = map[string]bool{
 	"credentials_location":         true,
 	"credentials_locations":        true,
 	"agentcookie":                  true,
+	"itad_auth":                    true,
 }
 
 func doctorIsInfoKey(key string) bool { return doctorInfoKeys[key] }

@@ -36,8 +36,10 @@ surfaced in the command meta.
 ## Auth
 
 A missing key fails fast with `ErrMissingAPIKey` before any HTTP call; the
-commands translate that (and HTTP 401/403) into a code-4 auth error naming
-`export ITAD_API_KEY="..."` and the key-registration URL.
+commands translate that (and HTTP 401/403) into a code-4 auth error naming both
+`export ITAD_API_KEY="..."` and the one-time `auth set-token --provider itad`
+store, plus the key-registration URL. Resolution order is the env override
+first, then the stored `itad_api_key` in `credentials.toml`.
 
 ## Tests
 

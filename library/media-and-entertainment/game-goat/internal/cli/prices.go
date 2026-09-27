@@ -117,8 +117,9 @@ Resolves a title (or a bare ITAD id) and lists every storefront's current
 price, cheapest first, plus the all-time low for context. Prices are
 localised to the selected storefront country: --country takes an ISO 3166-1
 alpha-2 code (default: ITAD_COUNTRY or US) and ITAD returns every amount in
-that region's currency. Requires ITAD_API_KEY — create a free key at
-https://isthereanydeal.com/apps/.
+that region's currency. Requires an IsThereAnyDeal key: either the ITAD_API_KEY
+environment variable or one stored with 'auth set-token --provider itad'.
+Create a free key at https://isthereanydeal.com/apps/.
 
 Use --deals-only to show just storefronts with an active price cut, and
 --limit to cap the row count. For the dated price history use

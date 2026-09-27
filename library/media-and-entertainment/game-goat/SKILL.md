@@ -188,7 +188,7 @@ game-goat-pp-cli retention "elden ring" --json
 game-goat-pp-cli price-history "elden ring" --json
 ```
 
-Historical lows (all-time, 1 year, 3 months), the current best storefront price, and a dated change log. Prices are localised to `--country` (ISO 3166-1 alpha-2; default `ITAD_COUNTRY` or US), so `--country GB` returns GBP. Requires `ITAD_API_KEY` — a free key from https://isthereanydeal.com/apps/.
+Historical lows (all-time, 1 year, 3 months), the current best storefront price, and a dated change log. Prices are localised to `--country` (ISO 3166-1 alpha-2; default `ITAD_COUNTRY` or US), so `--country GB` returns GBP. Requires an IsThereAnyDeal key — the `ITAD_API_KEY` env var or one stored via `auth set-token --provider itad`; get a free key at https://isthereanydeal.com/apps/.
 
 ### What does it cost where I live?
 
@@ -208,10 +208,11 @@ To persist credentials, use `echo "$TOKEN" | game-goat-pp-cli auth set-token`. S
 
 ### IsThereAnyDeal price data (optional)
 
-`price-history` and `prices` read from IsThereAnyDeal and need their own free API key, independent of the RAWG key:
+`price-history` and `prices` read from IsThereAnyDeal and need their own free API key, independent of the RAWG key. Store it once (recommended) or export it per shell:
 
 ```bash
-export ITAD_API_KEY="<your-key>"
+echo "$ITAD_API_KEY" | game-goat-pp-cli auth set-token --provider itad   # writes credentials.toml (0600)
+# or: export ITAD_API_KEY="<your-key>"
 ```
 
 Create a key at https://isthereanydeal.com/apps/. Prices are returned in the currency of the selected storefront country: pass `--country <ISO-3166-1>` (e.g. `GB`, `DE`) or set `ITAD_COUNTRY` for a default; without either, US/USD is used. A missing key surfaces as exit code 4 with setup guidance, not an upstream error.

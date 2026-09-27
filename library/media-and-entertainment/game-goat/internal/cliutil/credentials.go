@@ -31,6 +31,11 @@ type Credentials struct {
 	ClientID      string    `toml:"client_id"`
 	ClientSecret  string    `toml:"client_secret"`
 	RawgApiKey    string    `toml:"api_key"`
+	// PATCH(amend-2026-09-28: ITAD key stored in credentials.toml)
+	// ITADApiKey is the IsThereAnyDeal API key used by prices/price-history.
+	// It shares credentials.toml with api_key, so it is stored once, inherits
+	// the same 0600 permission guard, and never needs a per-shell export.
+	ITADApiKey string `toml:"itad_api_key"`
 }
 
 // CredentialsPermissionError means the credentials bytes were published but
@@ -241,7 +246,8 @@ func (c *Credentials) HasValues() bool {
 		c.RefreshToken != "" ||
 		c.ClientID != "" ||
 		c.ClientSecret != "" ||
-		c.RawgApiKey != ""
+		c.RawgApiKey != "" ||
+		c.ITADApiKey != ""
 }
 
 func credentialsFileHasValues(path string) bool {
@@ -286,6 +292,13 @@ func SaveCredentials(creds *Credentials) error {
 	if err != nil {
 		return err
 	}
+	return saveCredentialsToPath(path, creds)
+}
+
+// saveCredentialsToPath writes creds atomically and verifies the landed file's
+// permissions. Split out so callers resolving an explicit --config sibling
+// path reuse the same 0600 guard.
+func saveCredentialsToPath(path string, creds *Credentials) error {
 	data, err := toml.Marshal(credentialsFileFrom(creds)) // #nosec G117 -- credentials are intentionally persisted to a 0600 private file.
 	if err != nil {
 		return fmt.Errorf("marshaling credentials: %w", err)
@@ -299,6 +312,107 @@ func SaveCredentials(creds *Credentials) error {
 	}
 	if err := VerifyCredsPerms(real); err != nil {
 		return &CredentialsPermissionError{Path: path, Err: err}
+	}
+	return nil
+}
+
+// LoadITADCredential returns the stored IsThereAnyDeal API key, if any. The key
+// shares credentials.toml with the primary api_key, so it is stored once,
+// inherits the 0600 permission guard, and never needs a per-shell export.
+func LoadITADCredential() (string, bool, error) {
+	return LoadITADCredentialForConfig("")
+}
+
+// LoadITADCredentialForConfig is LoadITADCredential pinned to an explicit
+// --config sibling credentials file.
+func LoadITADCredentialForConfig(configPath string) (string, bool, error) {
+	creds, ok, err := loadCredentialsForRead(configPath)
+	if err != nil || !ok || creds == nil {
+		return "", false, err
+	}
+	key := strings.TrimSpace(creds.ITADApiKey)
+	return key, key != "", nil
+}
+
+// SaveITADCredential persists the IsThereAnyDeal API key alongside any sibling
+// credentials already present (e.g. the RAWG api_key), which it never drops.
+func SaveITADCredential(key string) error {
+	return SaveITADCredentialForConfig("", key)
+}
+
+// SaveITADCredentialForConfig is SaveITADCredential pinned to an explicit
+// --config sibling credentials file.
+func SaveITADCredentialForConfig(configPath, key string) error {
+	creds, err := loadCredentialsForWrite(configPath)
+	if err != nil {
+		return err
+	}
+	creds.ITADApiKey = strings.TrimSpace(key)
+	return saveCredentialsForConfig(configPath, creds)
+}
+
+// ClearITADCredential removes the stored IsThereAnyDeal API key, leaving the
+// other credential fields (e.g. the RAWG api_key) untouched.
+func ClearITADCredential() error {
+	return ClearITADCredentialForConfig("")
+}
+
+// ClearITADCredentialForConfig is ClearITADCredential pinned to an explicit
+// --config sibling credentials file.
+func ClearITADCredentialForConfig(configPath string) error {
+	creds, err := loadCredentialsForWrite(configPath)
+	if err != nil {
+		return err
+	}
+	if creds.ITADApiKey == "" {
+		return nil
+	}
+	creds.ITADApiKey = ""
+	if !creds.HasValues() {
+		return removeCredentialsForConfig(configPath)
+	}
+	return saveCredentialsForConfig(configPath, creds)
+}
+
+func loadCredentialsForRead(configPath string) (*Credentials, bool, error) {
+	if strings.TrimSpace(configPath) != "" {
+		return LoadCredentialsForConfig(configPath)
+	}
+	return LoadCredentials()
+}
+
+func loadCredentialsForWrite(configPath string) (*Credentials, error) {
+	creds, _, err := loadCredentialsForRead(configPath)
+	if err != nil {
+		return nil, err
+	}
+	if creds == nil {
+		creds = &Credentials{}
+	}
+	return creds, nil
+}
+
+func saveCredentialsForConfig(configPath string, creds *Credentials) error {
+	if strings.TrimSpace(configPath) != "" {
+		path, err := CredentialsFilePathForConfig(configPath)
+		if err != nil {
+			return err
+		}
+		return saveCredentialsToPath(path, creds)
+	}
+	return SaveCredentials(creds)
+}
+
+func removeCredentialsForConfig(configPath string) error {
+	if strings.TrimSpace(configPath) == "" {
+		return RemoveCredentials()
+	}
+	path, err := CredentialsFilePathForConfig(configPath)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing credentials: %w", err)
 	}
 	return nil
 }

@@ -121,6 +121,9 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 ```bash
 game-goat-pp-cli auth set-token
 
+# optional: store an IsThereAnyDeal key for prices/price-history
+echo "$ITAD_API_KEY" | game-goat-pp-cli auth set-token --provider itad
+
 game-goat-pp-cli games search "hollow knight" --json
 
 game-goat-pp-cli ratings "hollow knight" --json
@@ -177,7 +180,7 @@ game-goat-pp-cli retention "elden ring" --json
 game-goat-pp-cli price-history "elden ring" --json
 ```
 
-Historical lows (all-time, 1 year, 3 months), the current best storefront price, and a dated change log. Prices are localised to `--country` (ISO 3166-1 alpha-2; default `ITAD_COUNTRY` or US), so `--country GB` returns GBP. Requires `ITAD_API_KEY` — a free key from https://isthereanydeal.com/apps/.
+Historical lows (all-time, 1 year, 3 months), the current best storefront price, and a dated change log. Prices are localised to `--country` (ISO 3166-1 alpha-2; default `ITAD_COUNTRY` or US), so `--country GB` returns GBP. Requires an IsThereAnyDeal key — the `ITAD_API_KEY` env var or one stored via `auth set-token --provider itad`; get a free key at https://isthereanydeal.com/apps/.
 
 ### What does it cost where I live?
 

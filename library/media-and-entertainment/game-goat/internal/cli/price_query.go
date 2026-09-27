@@ -143,15 +143,41 @@ func normalizeSince(value string) (string, error) {
 	return "", fmt.Errorf("--since must be a YYYY-MM-DD date or RFC3339 timestamp, e.g. 2024-01-01")
 }
 
+// PATCH(amend-2026-09-28: ITAD key resolves env then stored credential)
+// resolveITADKey resolves the IsThereAnyDeal credential with the same
+// precedence the primary API key uses: an explicit env override wins, then the
+// stored credential in credentials.toml. Storing it once lets price commands
+// run in every shell without a per-session export.
+func resolveITADKey(flags *rootFlags) (string, error) {
+	if v := strings.TrimSpace(cliutil.EnvOverride("ITAD_API_KEY")); v != "" {
+		return v, nil
+	}
+	configPath := ""
+	if flags != nil {
+		configPath = flags.configPath
+	}
+	key, ok, err := cliutil.LoadITADCredentialForConfig(configPath)
+	if err != nil {
+		return "", configErr(fmt.Errorf("reading stored IsThereAnyDeal credential: %w", err))
+	}
+	if ok {
+		return key, nil
+	}
+	return "", nil
+}
+
 // newITADClient builds the IsThereAnyDeal client for the resolved country.
 // A missing key is a code-4 auth error with setup guidance, not an HTTP 403.
 func newITADClient(flags *rootFlags, country string) (*itad.Client, error) {
 	if err := validateDataSourceStrategy(flags, "live"); err != nil {
 		return nil, usageErr(err)
 	}
-	key := cliutil.EnvOverride("ITAD_API_KEY")
-	if strings.TrimSpace(key) == "" {
-		return nil, authErr(fmt.Errorf("no IsThereAnyDeal API key; create a free key at https://isthereanydeal.com/apps/ then set: export ITAD_API_KEY=\"<your-key>\""))
+	key, err := resolveITADKey(flags)
+	if err != nil {
+		return nil, err
+	}
+	if key == "" {
+		return nil, authErr(fmt.Errorf("no IsThereAnyDeal API key; create a free key at https://isthereanydeal.com/apps/ then either export ITAD_API_KEY=\"<your-key>\" or store it once with: echo \"$ITAD_API_KEY\" | game-goat-pp-cli auth set-token --provider itad"))
 	}
 	cfg := itad.NewConfig()
 	cfg.APIKey = key
@@ -169,7 +195,7 @@ func classifyITADError(err error) error {
 		return nil
 	}
 	if errors.Is(err, itad.ErrMissingAPIKey) || itad.IsAuthError(err) {
-		return authErr(fmt.Errorf("%w; check ITAD_API_KEY — create a free key at https://isthereanydeal.com/apps/", err))
+		return authErr(fmt.Errorf("%w; create a free key at https://isthereanydeal.com/apps/ then store it with: echo \"$ITAD_API_KEY\" | game-goat-pp-cli auth set-token --provider itad", err))
 	}
 	if itad.IsNotFound(err) {
 		return notFoundErr(err)

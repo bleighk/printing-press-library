@@ -130,8 +130,9 @@ the all-time low.
 
 Prices are localised to the selected storefront country: --country takes an
 ISO 3166-1 alpha-2 code (default: ITAD_COUNTRY or US) and ITAD returns every
-amount in that region's currency. Requires ITAD_API_KEY — create a free key
-at https://isthereanydeal.com/apps/.
+amount in that region's currency. Requires an IsThereAnyDeal key: either the
+ITAD_API_KEY environment variable or one stored with 'auth set-token --provider
+itad'. Create a free key at https://isthereanydeal.com/apps/.
 
 Remake collisions on the title are flagged ambiguous on stderr and in
 meta.ambiguous; pass an ITAD id to pin one.`,
