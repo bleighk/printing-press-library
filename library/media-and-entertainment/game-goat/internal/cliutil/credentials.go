@@ -411,14 +411,14 @@ func loadCredentialsForWrite(configPath string) (*Credentials, error) {
 }
 
 func saveCredentialsForConfig(configPath string, creds *Credentials) error {
-	if strings.TrimSpace(configPath) != "" {
-		path, err := CredentialsFilePathForConfig(configPath)
-		if err != nil {
-			return err
-		}
-		return saveCredentialsToPath(path, creds)
+	if strings.TrimSpace(configPath) == "" {
+		return SaveCredentials(creds)
 	}
-	return SaveCredentials(creds)
+	path, err := CredentialsFilePathForConfig(configPath)
+	if err != nil {
+		return err
+	}
+	return saveCredentialsToPath(path, creds)
 }
 
 func removeCredentialsForConfig(configPath string) error {
@@ -428,6 +428,27 @@ func removeCredentialsForConfig(configPath string) error {
 	path, err := CredentialsFilePathForConfig(configPath)
 	if err != nil {
 		return err
+	}
+	return RemoveCredentialsAt(path)
+}
+
+// SaveCredentialsAt writes creds to an explicit credentials path (an empty path
+// falls back to the default), reusing the 0600 permission guard. It lets a
+// --config-selected home keep its credentials beside its config instead of
+// writing into the default data dir.
+func SaveCredentialsAt(path string, creds *Credentials) error {
+	if strings.TrimSpace(path) == "" {
+		return SaveCredentials(creds)
+	}
+	return saveCredentialsToPath(path, creds)
+}
+
+// RemoveCredentialsAt removes an explicit credentials path (an empty path falls
+// back to the default), so a provider-specific clear never deletes a file in a
+// different home than the one it read.
+func RemoveCredentialsAt(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return RemoveCredentials()
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing credentials: %w", err)

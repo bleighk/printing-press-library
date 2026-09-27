@@ -196,21 +196,24 @@ func TestBuildLowRowsKeepsFreeZero(t *testing.T) {
 	}
 }
 
-// TestITADFallbackRequiresContinuation documents the guard that keeps a bogus
-// title from resolving to an unrelated game: a non-exact ITAD hit is only
-// accepted when it continues the query at a word boundary.
-func TestITADFallbackRequiresContinuation(t *testing.T) {
+// TestITADTitleAcceptable documents the guard that keeps a bogus title from
+// resolving to an unrelated game while still accepting abbreviated queries. A
+// non-exact ITAD hit is accepted when it continues the query at a word boundary
+// or contains the query as a whole-word run.
+func TestITADTitleAcceptable(t *testing.T) {
 	cases := []struct {
 		query, candidate string
 		want             bool
 	}{
-		{"the witcher 3", "The Witcher 3: Wild Hunt", true},
+		{"the witcher 3", "The Witcher 3: Wild Hunt", true}, // continuation
+		{"witcher 3", "The Witcher 3: Wild Hunt", true},     // abbreviation (whole-word run)
+		{"witcher", "The Witcher 3: Wild Hunt", true},       // single-word abbreviation
 		{"__printing_press_invalid__", "19th-century Printing Press Experience VR", false},
 		{"elden ringg", "Elden Ring", false},
 	}
 	for _, tc := range cases {
-		if got := isFranchiseContinuation(tc.query, tc.candidate); got != tc.want {
-			t.Fatalf("isFranchiseContinuation(%q, %q) = %v, want %v", tc.query, tc.candidate, got, tc.want)
+		if got := itadTitleAcceptable(tc.query, tc.candidate); got != tc.want {
+			t.Fatalf("itadTitleAcceptable(%q, %q) = %v, want %v", tc.query, tc.candidate, got, tc.want)
 		}
 	}
 }

@@ -205,6 +205,39 @@ func classifyITADError(err error) error {
 
 // resolveITADGame maps the positional argument (ITAD id or title) to a game,
 // returns the ambiguity candidates, and reports how it resolved.
+// itadTitleAcceptable reports whether a non-exact IsThereAnyDeal hit may stand
+// in for the query. The candidate must either continue the query at a word
+// boundary ("the witcher 3" -> "The Witcher 3: Wild Hunt") or contain the query
+// as a whole-word run ("witcher 3" -> "The Witcher 3: Wild Hunt"). Anything else
+// is treated as a different game and reported not-found, so a bogus title never
+// silently shows another game's prices.
+// PATCH(amend-2026-09-28: accept abbreviated ITAD titles, reject unrelated ones)
+func itadTitleAcceptable(query, candidate string) bool {
+	if isFranchiseContinuation(query, candidate) {
+		return true
+	}
+	q := normalizeGameTitle(query)
+	n := normalizeGameTitle(candidate)
+	if q == "" || len(q) > len(n) {
+		return false
+	}
+	for idx := 0; idx < len(n); {
+		rel := strings.Index(n[idx:], q)
+		if rel < 0 {
+			return false
+		}
+		start := idx + rel
+		end := start + len(q)
+		beforeOK := start == 0 || n[start-1] == ' '
+		afterOK := end == len(n) || n[end] == ' ' || n[end] == ':'
+		if beforeOK && afterOK {
+			return true
+		}
+		idx = start + 1
+	}
+	return false
+}
+
 func resolveITADGame(ctx context.Context, cmd *cobra.Command, c *itad.Client, title string) (itad.Game, []itadCandidate, string, error) {
 	if id, ok := parseITADID(title); ok {
 		game, err := c.Info(ctx, id)
@@ -238,8 +271,8 @@ func resolveITADGame(ctx context.Context, cmd *cobra.Command, c *itad.Client, ti
 		// report not-found and let the caller pass an id or a fuller title
 		// rather than showing another game's prices.
 		// PATCH(amend-2026-09-28: ITAD fuzzy fallback requires a continuation)
-		if !isFranchiseContinuation(title, game.Title) {
-			return itad.Game{}, nil, "", notFoundErr(fmt.Errorf("no game titled %q (or a word-boundary continuation of it) in IsThereAnyDeal; closest match was %q — try a fuller title or pass an ITAD id", title, game.Title))
+		if !itadTitleAcceptable(title, game.Title) {
+			return itad.Game{}, nil, "", notFoundErr(fmt.Errorf("no game titled %q in IsThereAnyDeal; closest match was %q — try a fuller title or pass an ITAD id", title, game.Title))
 		}
 		fmt.Fprintf(cmd.ErrOrStderr(), "no exact title match for %q; using %q (%s) — pass an ITAD id to pin the exact game\n", title, game.Title, game.ID)
 	}

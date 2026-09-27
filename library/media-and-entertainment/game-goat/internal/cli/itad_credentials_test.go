@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -144,5 +146,101 @@ func TestRawgLogoutPreservesStoredITADKey(t *testing.T) {
 	}
 	if creds.ITADApiKey != "itad-secret" {
 		t.Fatalf("ITAD key = %q, want itad-secret (RAWG logout must not drop it)", creds.ITADApiKey)
+	}
+}
+
+// TestLogoutWithExplicitConfigTargetsSiblingCredentials proves logout reads and
+// writes the same selected home: with --config X, the remaining ITAD key is
+// rewritten into X/data/credentials.toml and the RAWG key there is cleared,
+// never the default home's file.
+func TestLogoutWithExplicitConfigTargetsSiblingCredentials(t *testing.T) {
+	restore, err := cliutil.SetHomeOverride(t.TempDir())
+	if err != nil {
+		t.Fatalf("SetHomeOverride: %v", err)
+	}
+	defer restore()
+	t.Setenv("ITAD_API_KEY", "")
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	credsPath := filepath.Join(dir, "data", "credentials.toml")
+	if err := os.MkdirAll(filepath.Dir(credsPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(credsPath, []byte("api_key = \"rawg-secret\"\nitad_api_key = \"itad-secret\"\n"), 0o600); err != nil {
+		t.Fatalf("seed sibling credentials: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("base_url = \"https://api.rawg.io/api\"\n"), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if err := cfg.ClearTokens(); err != nil {
+		t.Fatalf("ClearTokens: %v", err)
+	}
+
+	creds, ok, err := cliutil.LoadCredentialsForConfig(cfgPath)
+	if err != nil || !ok {
+		t.Fatalf("sibling credentials: ok=%v err=%v", ok, err)
+	}
+	if creds.RawgApiKey != "" {
+		t.Fatalf("selected home's RAWG key survived logout: %q", creds.RawgApiKey)
+	}
+	if creds.ITADApiKey != "itad-secret" {
+		t.Fatalf("ITAD key = %q, want itad-secret", creds.ITADApiKey)
+	}
+
+	defPath, err := cliutil.CredentialsFilePath()
+	if err != nil {
+		t.Fatalf("CredentialsFilePath: %v", err)
+	}
+	if _, err := os.Stat(defPath); !os.IsNotExist(err) {
+		t.Fatalf("explicit-config logout wrote the default home's credentials file: %v", err)
+	}
+}
+
+// TestLogoutAllWithExplicitConfigRemovesSiblingCredentials proves the
+// no-ITAD removal path also targets the selected home, leaving no RAWG key on
+// disk there and not touching the default home.
+func TestLogoutAllWithExplicitConfigRemovesSiblingCredentials(t *testing.T) {
+	restore, err := cliutil.SetHomeOverride(t.TempDir())
+	if err != nil {
+		t.Fatalf("SetHomeOverride: %v", err)
+	}
+	defer restore()
+	t.Setenv("ITAD_API_KEY", "")
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	credsPath := filepath.Join(dir, "data", "credentials.toml")
+	if err := os.MkdirAll(filepath.Dir(credsPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(credsPath, []byte("api_key = \"rawg-secret\"\n"), 0o600); err != nil {
+		t.Fatalf("seed sibling credentials: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("base_url = \"https://api.rawg.io/api\"\n"), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if err := cfg.ClearTokens(); err != nil {
+		t.Fatalf("ClearTokens: %v", err)
+	}
+	if _, err := os.Stat(credsPath); !os.IsNotExist(err) {
+		t.Fatalf("selected home's credentials file was not removed: %v", err)
+	}
+	defPath, err := cliutil.CredentialsFilePath()
+	if err != nil {
+		t.Fatalf("CredentialsFilePath: %v", err)
+	}
+	if _, err := os.Stat(defPath); !os.IsNotExist(err) {
+		t.Fatalf("explicit-config logout created the default home's credentials file: %v", err)
 	}
 }

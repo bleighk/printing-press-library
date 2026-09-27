@@ -287,6 +287,13 @@ func credentialSavePath(cfg *config.Config) string {
 	if cfg != nil && cfg.AgentcookieManagedByExternalStore() {
 		return cfg.Path
 	}
+	// Prefer the file this config actually reads/writes so an explicit --config
+	// home reports (and writes) its sibling credentials, not the default one.
+	if cfg != nil {
+		if path, err := cfg.CredentialsFilePath(); err == nil {
+			return path
+		}
+	}
 	if path, err := cliutil.CredentialsFilePath(); err == nil {
 		return path
 	}

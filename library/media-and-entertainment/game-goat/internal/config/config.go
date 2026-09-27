@@ -42,6 +42,12 @@ type Config struct {
 	RawgApiKey       string          `toml:"api_key"`
 	// PATCH(amend-2026-09-28: carry the ITAD key so RAWG saves/logout preserve it)
 	ITADApiKey string `toml:"itad_api_key"`
+	// PATCH(amend-2026-09-28: remember which credentials file this config reads)
+	// credsPath is the credentials file resolved at Load: an explicit --config
+	// keeps credentials beside the config file, the default home uses the
+	// default data dir. Credential writes/removals target it so a selected
+	// home never strands a key in another home. Unexported: never persisted.
+	credsPath string `toml:"-"`
 }
 
 func Load(configPath string) (*Config, error) {
@@ -121,6 +127,18 @@ func Load(configPath string) (*Config, error) {
 		}
 	}
 	cfg.Path = path
+	// Capture the credentials file this load reads so saves/removals target the
+	// same one. An explicit --config colocates credentials under its data dir.
+	if explicitConfigFile {
+		if p, perr := cliutil.CredentialsFilePathForConfig(path); perr == nil {
+			cfg.credsPath = p
+		}
+	}
+	if cfg.credsPath == "" {
+		if p, perr := cliutil.CredentialsFilePath(); perr == nil {
+			cfg.credsPath = p
+		}
+	}
 	if cfg.AgentcookieManagedByExternalStore() {
 		cfg.markAgentcookieManaged()
 	} else {
@@ -455,13 +473,29 @@ func (c *Config) applyCredentials(creds *cliutil.Credentials) {
 	}
 }
 
+// CredentialsFilePath returns the credentials file this config was loaded from
+// (or would write to): the explicit --config sibling data dir when an explicit
+// config was selected, else the default data dir. Credential writes and
+// removals must target it so a --config-selected home never writes into, or
+// strands a key in, another home.
+func (c *Config) CredentialsFilePath() (string, error) {
+	if c != nil && c.credsPath != "" {
+		return c.credsPath, nil
+	}
+	return cliutil.CredentialsFilePath()
+}
+
 func (c *Config) saveCredentialsFirst() error {
 	if c.AgentcookieManagedByExternalStore() {
 		c.markAgentcookieManaged()
 		return nil
 	}
 	persisted := c.configForSave()
-	if err := cliutil.SaveCredentials(persisted.credentials()); err != nil {
+	credsPath, err := c.CredentialsFilePath()
+	if err != nil {
+		return err
+	}
+	if err := cliutil.SaveCredentialsAt(credsPath, persisted.credentials()); err != nil {
 		return err
 	}
 	c.CredentialSource = "credentials file"
@@ -479,7 +513,7 @@ type credentialsSnapshot struct {
 // Credentials and config are separate files. Publishing tokens first would
 // otherwise leave a new credentials.toml if the config write fails.
 func (c *Config) saveCredentialsThenConfig() error {
-	credsPath, err := cliutil.CredentialsFilePath()
+	credsPath, err := c.CredentialsFilePath()
 	if err != nil {
 		return err
 	}
@@ -663,17 +697,24 @@ func (c *Config) ClearTokens() error {
 		// back; returning early would leave the secrets on disk.
 		return c.save()
 	}
-	// PATCH(amend-2026-09-28: logout keeps a sibling ITAD credential)
+	// PATCH(amend-2026-09-28: logout keeps a sibling ITAD credential and the
+	// selected home) — resolve the credentials file this config read from so
+	// the clear lands in the same home; removing/writing the default file would
+	// strand the selected home's key and overwrite the default home's.
+	credsPath, err := c.CredentialsFilePath()
+	if err != nil {
+		return err
+	}
 	// Removing the shared file would silently drop the IsThereAnyDeal key when
 	// only the RAWG credential is being cleared, so rewrite it instead.
 	if persisted := c.configForSave(); persisted.ITADApiKey != "" {
-		if err := cliutil.SaveCredentials(persisted.credentials()); err != nil {
+		if err := cliutil.SaveCredentialsAt(credsPath, persisted.credentials()); err != nil {
 			return err
 		}
 		c.CredentialSource = "credentials file"
 		return c.save()
 	}
-	if err := cliutil.RemoveCredentials(); err != nil {
+	if err := cliutil.RemoveCredentialsAt(credsPath); err != nil {
 		return err
 	}
 	return c.save()
