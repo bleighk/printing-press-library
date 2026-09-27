@@ -155,6 +155,8 @@ game-goat-pp-cli series "zelda" --json
 game-goat-pp-cli ratings "resident evil 4" --year 2023 --json
 ```
 
+A pinned `--year` is a hard constraint on the title too: if no game with that exact title was released in that year, the command reports not-found (drop `--year` or pass a RAWG id) rather than resolving a different game from the same year.
+
 ### Will people actually finish it?
 
 ```bash

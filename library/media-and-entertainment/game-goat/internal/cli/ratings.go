@@ -30,14 +30,15 @@ func resolveTitleForMultiSource(ctx context.Context, cmd *cobra.Command, c *clie
 		return rawgGame{}, nil, err
 	}
 	if len(exact) == 0 {
-		// A pinned --year is a hard constraint: never resolve to a search
-		// hit from a different release year. Filter the ranked hits to the
-		// requested year first; only a year-matching hit can resolve.
+		// A pinned --year is a hard constraint on the title too:
+		// resolveExactTitleMatches already filtered exact-title matches to
+		// the requested year, so an empty set means no game with that
+		// title was released that year in the top RAWG results. Never
+		// fall back to a non-exact search hit here — the year-matching top
+		// results can be a different game entirely.
+		// PATCH(amend-2026-09-28: year pin must not resolve a different title) — was filterByReleaseYear + bestKnownGame fallback
 		if year != "" {
-			ranked = filterByReleaseYear(ranked, year)
-			if len(ranked) == 0 {
-				return rawgGame{}, nil, notFoundErr(fmt.Errorf("no game titled %q released in %s in the top RAWG search results; drop --year to resolve across years, or use a RAWG id", title, year))
-			}
+			return rawgGame{}, nil, notFoundErr(fmt.Errorf("no game titled %q released in %s in the top RAWG search results; drop --year to resolve across years, or use a RAWG id", title, year))
 		}
 		// No normalized exact match: fall back to the top-ranked search hit
 		// with an explicit notice. Users type partial titles ("the witcher

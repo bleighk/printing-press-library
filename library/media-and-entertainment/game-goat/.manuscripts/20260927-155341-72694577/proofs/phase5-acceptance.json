@@ -12,7 +12,7 @@
     "type": "api_key",
     "api_key_available": true
   },
-  "source_fingerprint": "e9c4108f3e609d98ab22718bb5a2d5f0490d0401dd23853b9f9f430dba16fc92",
+  "source_fingerprint": "47ee40bdb715acebfd33134eb96b4defa463389d260366204072b60e77e87679",
   "source_files": {
     "cmd/game-goat-pp-cli/main.go": "a1394013e76344175a16455d2f884e83a74a3ca8e439115de29ff0454d88096d",
     "cmd/game-goat-pp-mcp/http_auth_test.go": "b92729242beb3fc93d02bf4b8f939a033e39ec05e715cdae8431b7577f5152be",
@@ -97,7 +97,8 @@
     "internal/cli/publishers.go": "408e00ea253c9f1f2a5d429dbc3fa319dd35bb025b9c056df6acdb7944575c2c",
     "internal/cli/publishers_list.go": "043b1f98db542353daee0c5eea8fc958cbfadda048da1932ea56273e4670e178",
     "internal/cli/publishers_read.go": "0cf0f9b5ddf40ecde2783087bacc7fa88e6c620e3d06411c933996f417b95f83",
-    "internal/cli/ratings.go": "92de1d756f57617f081501246a049b73134e2dbb75fb414f2d56ef1b37fa2e63",
+    "internal/cli/ratings.go": "bd8515d465e35b6db82d35c8d0d4f27db749bcc4316ea221f1df74a278e816ca",
+    "internal/cli/ratings_resolve_test.go": "20da60cda25f7effaa22f7ce0cd58a7f5d353812eb7c5496195c8d8e33527160",
     "internal/cli/resolver_test.go": "e02ede50e3524ccf6e1d4113e9ddacee30a7550d19e2a405a0c1f1ef10cff050",
     "internal/cli/resource_paths.go": "e526e206d2e824106019b746c559d920da91d2fa2bd7d2fb1d0b78aa07e798fa",
     "internal/cli/retention.go": "111db13f854024399139c06629128fa212a16efad28aac60f8c7e3b9e3a95946",
