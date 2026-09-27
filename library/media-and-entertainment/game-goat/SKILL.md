@@ -125,10 +125,10 @@ These capabilities aren't available in any other tool for this API.
 
 **ratings · retention · series · similar**
 
-- `game-goat-pp-cli ratings <title>` — RAWG + Metacritic + Steam rating card.
+- `game-goat-pp-cli ratings <title>` — RAWG + Metacritic + Steam rating card (title or bare RAWG id).
 - `game-goat-pp-cli retention <title>` — community beaten/dropped/playing/yet split with an aspirational-trap verdict (needs RAWG_API_KEY).
-- `game-goat-pp-cli series <title>` — franchise play order by release date, anchor included.
-- `game-goat-pp-cli similar <title>` — tiered recommendations: same studio (capped), defining gameplay tag, then shared genres; each row carries `tier` and `reason`.
+- `game-goat-pp-cli series <title>` — franchise play order by release date, anchor included (title or bare RAWG id).
+- `game-goat-pp-cli similar <title>` — tiered recommendations: same studio (capped), defining gameplay tag, then shared genres; each row carries `tier` and `reason` (title or bare RAWG id).
 
 **framework**
 

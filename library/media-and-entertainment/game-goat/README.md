@@ -125,6 +125,8 @@ game-goat-pp-cli games search "hollow knight" --json
 
 game-goat-pp-cli ratings "hollow knight" --json
 
+game-goat-pp-cli ratings 3498 --json
+
 game-goat-pp-cli similar "hollow knight" --json
 
 ```

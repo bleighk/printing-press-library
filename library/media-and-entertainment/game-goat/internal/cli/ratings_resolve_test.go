@@ -59,3 +59,63 @@ func TestResolveTitleForMultiSourceYearPinRequiresExactTitle(t *testing.T) {
 		t.Fatalf("expected fallback notice on stderr, got: %q", errBuf.String())
 	}
 }
+
+// PR #2057 follow-up P1: a year-pinned partial title ("the witcher 3"
+// --year 2015) must resolve to the same-year release whose full name
+// continues the query at a word boundary, instead of failing hard.
+func TestResolveTitleForMultiSourceYearPinnedPartialTitleResolves(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"count":2,"results":[`+
+			`{"id":12742,"name":"The Witcher Adventure Game","released":"2014-11-27","added":51},`+
+			`{"id":26153,"name":"The Witcher 3: Wild Hunt","released":"2015-05-19","added":10364}`+
+			`]}`)
+	}))
+	defer srv.Close()
+
+	c := client.New(&config.Config{BaseURL: srv.URL}, 0, 0)
+	c.NoCache = true
+	var errBuf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetErr(&errBuf)
+	flags := &rootFlags{}
+
+	// "the witcher 3" --year 2015: the exact title is "The Witcher 3: Wild
+	// Hunt", which normalizes differently, but it continues the query at a
+	// word boundary and was released in the pinned year.
+	game, _, err := resolveTitleForMultiSource(context.Background(), cmd, c, flags, "the witcher 3", "2015")
+	if err != nil {
+		t.Fatalf("year-pinned partial title must resolve: %v", err)
+	}
+	if game.ID != 26153 {
+		t.Fatalf("resolved id %d (%q), want The Witcher 3: Wild Hunt (26153)", game.ID, game.Name)
+	}
+	if !strings.Contains(errBuf.String(), "no exact title match") {
+		t.Fatalf("expected partial-title notice on stderr, got: %q", errBuf.String())
+	}
+}
+
+// PR #2057 follow-up P2: the year-pin not-found error promises a RAWG id
+// recovery path; a bare-numeric argument must resolve as that id without
+// a search round-trip.
+func TestResolveTitleForMultiSourceAcceptsRawgID(t *testing.T) {
+	// The server fails every request: id resolution must short-circuit
+	// before any HTTP call.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := client.New(&config.Config{BaseURL: srv.URL}, 0, 0)
+	c.NoCache = true
+	cmd := &cobra.Command{}
+	flags := &rootFlags{}
+
+	game, _, err := resolveTitleForMultiSource(context.Background(), cmd, c, flags, "26153", "")
+	if err != nil {
+		t.Fatalf("numeric RAWG id must resolve without error: %v", err)
+	}
+	if game.ID != 26153 {
+		t.Fatalf("resolved id %d, want 26153", game.ID)
+	}
+}
