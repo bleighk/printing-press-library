@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/mvanhorn/printing-press-library/library/media-and-entertainment/game-goat/internal/cliutil"
 	"github.com/mvanhorn/printing-press-library/library/media-and-entertainment/game-goat/internal/config"
+	"github.com/spf13/cobra"
 )
 
 // TestResolveITADKeyPrecedence proves the stored credential is used when no env
@@ -146,6 +148,88 @@ func TestRawgLogoutPreservesStoredITADKey(t *testing.T) {
 	}
 	if creds.ITADApiKey != "itad-secret" {
 		t.Fatalf("ITAD key = %q, want itad-secret (RAWG logout must not drop it)", creds.ITADApiKey)
+	}
+}
+
+// TestCredentialsFileITADKeyBeatsConfigFileKey proves a rotated key stored via
+// auth set-token --provider itad (credentials file) is used even when the config
+// file still carries an older itad_api_key.
+func TestCredentialsFileITADKeyBeatsConfigFileKey(t *testing.T) {
+	restore, err := cliutil.SetHomeOverride(t.TempDir())
+	if err != nil {
+		t.Fatalf("SetHomeOverride: %v", err)
+	}
+	defer restore()
+	t.Setenv("ITAD_API_KEY", "")
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	credsPath := filepath.Join(dir, "data", "credentials.toml")
+	if err := os.MkdirAll(filepath.Dir(credsPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(credsPath, []byte("itad_api_key = \"itad-new\"\n"), 0o600); err != nil {
+		t.Fatalf("seed credentials: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("base_url = \"https://api.rawg.io/api\"\nitad_api_key = \"itad-old\"\n"), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if cfg.ITADApiKey != "itad-new" {
+		t.Fatalf("ITAD key = %q, want itad-new (credentials file must beat a stale config value)", cfg.ITADApiKey)
+	}
+}
+
+// TestResolveITADKeyEnvBypassesMalformedConfig proves a valid env key still
+// works when the config file cannot be parsed.
+func TestResolveITADKeyEnvBypassesMalformedConfig(t *testing.T) {
+	restore, err := cliutil.SetHomeOverride(t.TempDir())
+	if err != nil {
+		t.Fatalf("SetHomeOverride: %v", err)
+	}
+	defer restore()
+	t.Setenv("ITAD_API_KEY", "env-itad")
+
+	bad := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(bad, []byte("this is not = valid = toml\n"), 0o600); err != nil {
+		t.Fatalf("seed malformed config: %v", err)
+	}
+	key, err := resolveITADKey(&rootFlags{configPath: bad})
+	if err != nil {
+		t.Fatalf("resolveITADKey must use the env key despite a malformed config: %v", err)
+	}
+	if key != "env-itad" {
+		t.Fatalf("key = %q, want env-itad", key)
+	}
+}
+
+// TestSaveITADTokenReportsSelectedHome proves the reported credentials_path is
+// the file actually written, not the default home's path.
+func TestSaveITADTokenReportsSelectedHome(t *testing.T) {
+	restore, err := cliutil.SetHomeOverride(t.TempDir())
+	if err != nil {
+		t.Fatalf("SetHomeOverride: %v", err)
+	}
+	defer restore()
+	t.Setenv("ITAD_API_KEY", "")
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("base_url = \"https://api.rawg.io/api\"\n"), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+	if err := saveITADToken(cmd, &rootFlags{configPath: cfgPath, asJSON: true}, "itad-x"); err != nil {
+		t.Fatalf("saveITADToken: %v", err)
+	}
+	want := filepath.Join(dir, "data", "credentials.toml")
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("reported credentials_path missing %q: %s", want, buf.String())
 	}
 }
 

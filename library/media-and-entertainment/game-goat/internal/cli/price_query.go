@@ -150,13 +150,17 @@ func normalizeSince(value string) (string, error) {
 // stored credential in credentials.toml. Storing it once lets price commands
 // run in every shell without a per-session export.
 func resolveITADKey(flags *rootFlags) (string, error) {
+	// An explicit env key must work even when the config file is malformed or
+	// unreadable, so resolve it before loading config.
+	if v := strings.TrimSpace(cliutil.EnvOverride("ITAD_API_KEY")); v != "" {
+		return v, nil
+	}
 	configPath := ""
 	if flags != nil {
 		configPath = flags.configPath
 	}
 	// config.Load resolves GAME_GOAT_CONFIG/--config the same way every other
-	// command does and applies the ITAD_API_KEY env override, so the key comes
-	// from the same home the rest of the run uses.
+	// command does, so the key comes from the same home the rest of the run uses.
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return "", configErr(fmt.Errorf("loading config for the IsThereAnyDeal credential: %w", err))

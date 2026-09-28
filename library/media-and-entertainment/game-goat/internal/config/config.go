@@ -183,10 +183,12 @@ func Load(configPath string) (*Config, error) {
 	// Never take it from a cross-home credential fallback: persisting it would
 	// copy the default home's ITAD key into a selected config home. Read it
 	// from the same credentials file this config writes to instead.
-	if cfg.ITADApiKey == "" {
-		if key, ok := cliutil.LoadITADKeyQuiet(cfg.credsPath); ok {
-			cfg.ITADApiKey = key
-		}
+	// The credentials file is authoritative for the ITAD key: auth set-token
+	// --provider itad writes there, so a config-file itad_api_key must not
+	// shadow a rotated key. The ITAD_API_KEY env override is applied below and
+	// still wins.
+	if key, ok := cliutil.LoadITADKeyQuiet(cfg.credsPath); ok {
+		cfg.ITADApiKey = key
 	}
 
 	cfg.snapshotFileConfig()

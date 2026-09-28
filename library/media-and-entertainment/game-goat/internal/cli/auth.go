@@ -276,7 +276,8 @@ func saveITADToken(cmd *cobra.Command, flags *rootFlags, token string) error {
 	if err := cliutil.SaveITADCredentialAt(credsPath, token); err != nil {
 		return configErr(fmt.Errorf("saving IsThereAnyDeal token: %w", err))
 	}
-	savePath := itadCredentialSavePath(configPath)
+	// Report the path we actually wrote, not the default home's path.
+	savePath := credsPath
 	if asJSON {
 		out := map[string]any{"saved": true, "provider": "itad"}
 		if savePath != "" {
