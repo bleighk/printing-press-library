@@ -15,7 +15,8 @@
       "command": "${__dirname}/bin/game-goat-pp-mcp",
       "args": [],
       "env": {
-        "RAWG_API_KEY": "${user_config.rawg_api_key}"
+        "RAWG_API_KEY": "${user_config.rawg_api_key}",
+        "ITAD_API_KEY": "${user_config.itad_api_key}"
       }
     }
   },
@@ -26,6 +27,13 @@
       "description": "Sets RAWG_API_KEY for the Rawg Video Games MCP server. Get a credential from https://rawg.io/apidocs.",
       "sensitive": true,
       "required": true
+    },
+    "itad_api_key": {
+      "type": "string",
+      "title": "ITAD_API_KEY (optional)",
+      "description": "Optional. Enables the prices and price-history tools (IsThereAnyDeal) by setting ITAD_API_KEY. Get a free key from https://isthereanydeal.com/apps/. Leave blank to use the RAWG-only commands.",
+      "sensitive": true,
+      "required": false
     }
   },
   "compatibility": {
