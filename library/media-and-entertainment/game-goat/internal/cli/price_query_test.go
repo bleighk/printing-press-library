@@ -206,8 +206,9 @@ func TestITADTitleAcceptable(t *testing.T) {
 		want             bool
 	}{
 		{"the witcher 3", "The Witcher 3: Wild Hunt", true}, // continuation
-		{"witcher 3", "The Witcher 3: Wild Hunt", true},     // abbreviation (whole-word run)
+		{"witcher 3", "The Witcher 3: Wild Hunt", true},     // abbreviation (prefix of core title)
 		{"witcher", "The Witcher 3: Wild Hunt", true},       // single-word abbreviation
+		{"hunt", "The Witcher 3: Wild Hunt", false},         // suffix word is a different game
 		{"__printing_press_invalid__", "19th-century Printing Press Experience VR", false},
 		{"elden ringg", "Elden Ring", false},
 	}

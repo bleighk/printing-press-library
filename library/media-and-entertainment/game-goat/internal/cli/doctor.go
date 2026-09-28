@@ -255,8 +255,10 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 			itadSource := ""
 			if strings.TrimSpace(cliutil.EnvOverride("ITAD_API_KEY")) != "" {
 				itadSource = "env:ITAD_API_KEY"
-			} else if _, ok, _ := cliutil.LoadITADCredentialForConfig(flags.configPath); ok {
-				itadSource = "credentials file"
+			} else if itadPath, itadPathErr := cfg.CredentialsFilePath(); itadPathErr == nil {
+				if _, ok, _ := cliutil.LoadITADCredentialAt(itadPath); ok {
+					itadSource = "credentials file"
+				}
 			}
 			if itadSource != "" {
 				report["itad_auth"] = "configured (" + itadSource + ")"

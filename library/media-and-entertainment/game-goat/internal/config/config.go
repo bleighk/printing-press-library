@@ -179,6 +179,16 @@ func Load(configPath string) (*Config, error) {
 		}
 	}
 
+	// PATCH(amend-2026-09-28: read the ITAD key from this config's own home)
+	// Never take it from a cross-home credential fallback: persisting it would
+	// copy the default home's ITAD key into a selected config home. Read it
+	// from the same credentials file this config writes to instead.
+	if cfg.ITADApiKey == "" {
+		if key, ok := cliutil.LoadITADKeyQuiet(cfg.credsPath); ok {
+			cfg.ITADApiKey = key
+		}
+	}
+
 	cfg.snapshotFileConfig()
 
 	// Env var overrides
@@ -466,10 +476,6 @@ func (c *Config) applyCredentials(creds *cliutil.Credentials) {
 	}
 	if c.RawgApiKey == "" {
 		c.RawgApiKey = creds.RawgApiKey
-	}
-	// PATCH(amend-2026-09-28: merge the sibling ITAD credential)
-	if c.ITADApiKey == "" {
-		c.ITADApiKey = creds.ITADApiKey
 	}
 }
 

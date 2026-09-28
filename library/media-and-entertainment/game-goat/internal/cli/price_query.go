@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mvanhorn/printing-press-library/library/media-and-entertainment/game-goat/internal/cliutil"
+	"github.com/mvanhorn/printing-press-library/library/media-and-entertainment/game-goat/internal/config"
 	"github.com/mvanhorn/printing-press-library/library/media-and-entertainment/game-goat/internal/source/itad"
 
 	"github.com/spf13/cobra"
@@ -149,21 +150,18 @@ func normalizeSince(value string) (string, error) {
 // stored credential in credentials.toml. Storing it once lets price commands
 // run in every shell without a per-session export.
 func resolveITADKey(flags *rootFlags) (string, error) {
-	if v := strings.TrimSpace(cliutil.EnvOverride("ITAD_API_KEY")); v != "" {
-		return v, nil
-	}
 	configPath := ""
 	if flags != nil {
 		configPath = flags.configPath
 	}
-	key, ok, err := cliutil.LoadITADCredentialForConfig(configPath)
+	// config.Load resolves GAME_GOAT_CONFIG/--config the same way every other
+	// command does and applies the ITAD_API_KEY env override, so the key comes
+	// from the same home the rest of the run uses.
+	cfg, err := config.Load(configPath)
 	if err != nil {
-		return "", configErr(fmt.Errorf("reading stored IsThereAnyDeal credential: %w", err))
+		return "", configErr(fmt.Errorf("loading config for the IsThereAnyDeal credential: %w", err))
 	}
-	if ok {
-		return key, nil
-	}
-	return "", nil
+	return strings.TrimSpace(cfg.ITADApiKey), nil
 }
 
 // newITADClient builds the IsThereAnyDeal client for the resolved country.
@@ -206,36 +204,37 @@ func classifyITADError(err error) error {
 // resolveITADGame maps the positional argument (ITAD id or title) to a game,
 // returns the ambiguity candidates, and reports how it resolved.
 // itadTitleAcceptable reports whether a non-exact IsThereAnyDeal hit may stand
-// in for the query. The candidate must either continue the query at a word
-// boundary ("the witcher 3" -> "The Witcher 3: Wild Hunt") or contain the query
-// as a whole-word run ("witcher 3" -> "The Witcher 3: Wild Hunt"). Anything else
-// is treated as a different game and reported not-found, so a bogus title never
-// silently shows another game's prices.
+// in for the query. The candidate's core title (leading article dropped) must
+// begin with the query at a word boundary: "witcher 3" and "the witcher 3" both
+// accept "The Witcher 3: Wild Hunt", while an unrelated match such as "hunt",
+// "elden ringg", or "__printing_press_invalid__" is reported not-found rather
+// than silently showing another game's prices.
 // PATCH(amend-2026-09-28: accept abbreviated ITAD titles, reject unrelated ones)
 func itadTitleAcceptable(query, candidate string) bool {
-	if isFranchiseContinuation(query, candidate) {
-		return true
-	}
-	q := normalizeGameTitle(query)
-	n := normalizeGameTitle(candidate)
-	if q == "" || len(q) > len(n) {
+	q := stripITADArticle(normalizeGameTitle(query))
+	c := stripITADArticle(normalizeGameTitle(candidate))
+	if q == "" || c == "" {
 		return false
 	}
-	for idx := 0; idx < len(n); {
-		rel := strings.Index(n[idx:], q)
-		if rel < 0 {
-			return false
-		}
-		start := idx + rel
-		end := start + len(q)
-		beforeOK := start == 0 || n[start-1] == ' '
-		afterOK := end == len(n) || n[end] == ' ' || n[end] == ':'
-		if beforeOK && afterOK {
-			return true
-		}
-		idx = start + 1
+	if q == c {
+		return true
 	}
-	return false
+	if !strings.HasPrefix(c, q) {
+		return false
+	}
+	rest := c[len(q):]
+	return strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, ":")
+}
+
+// stripITADArticle drops a leading article so "the witcher 3" and "witcher 3"
+// both compare against a candidate's core title.
+func stripITADArticle(s string) string {
+	for _, a := range []string{"the ", "a ", "an "} {
+		if strings.HasPrefix(s, a) {
+			return s[len(a):]
+		}
+	}
+	return s
 }
 
 func resolveITADGame(ctx context.Context, cmd *cobra.Command, c *itad.Client, title string) (itad.Game, []itadCandidate, string, error) {

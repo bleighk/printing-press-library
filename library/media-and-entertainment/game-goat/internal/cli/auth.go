@@ -96,7 +96,13 @@ func newAuthStatusCmd(flags *rootFlags) *cobra.Command {
 
 			// PATCH(amend-2026-09-28: auth status reports the ITAD credential)
 			itadEnv := strings.TrimSpace(os.Getenv("ITAD_API_KEY")) != ""
-			_, itadStored, itadErr := cliutil.LoadITADCredentialForConfig(flags.configPath)
+			var itadStored bool
+			var itadErr error
+			if itadPath, itadPathErr := cfg.CredentialsFilePath(); itadPathErr == nil {
+				_, itadStored, itadErr = cliutil.LoadITADCredentialAt(itadPath)
+			} else {
+				itadErr = itadPathErr
+			}
 			itadAuthed := itadEnv || (itadErr == nil && itadStored)
 			itadSource := ""
 			switch {
@@ -256,7 +262,18 @@ func saveITADToken(cmd *cobra.Command, flags *rootFlags, token string) error {
 		configPath = flags.configPath
 		asJSON = flags.asJSON
 	}
-	if err := cliutil.SaveITADCredentialForConfig(configPath, token); err != nil {
+	// Resolve the credentials file through the same config the CLI loaded, so a
+	// GAME_GOAT_CONFIG or --config selection stores the key in that home rather
+	// than the default one.
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return configErr(err)
+	}
+	credsPath, err := cfg.CredentialsFilePath()
+	if err != nil {
+		return configErr(err)
+	}
+	if err := cliutil.SaveITADCredentialAt(credsPath, token); err != nil {
 		return configErr(fmt.Errorf("saving IsThereAnyDeal token: %w", err))
 	}
 	savePath := itadCredentialSavePath(configPath)
@@ -317,16 +334,19 @@ func newAuthLogoutCmd(flags *rootFlags) *cobra.Command {
 			}
 
 			which := strings.ToLower(strings.TrimSpace(provider))
-			configPath := ""
-			if flags != nil {
-				configPath = flags.configPath
+			// Clear the credentials file this config loaded from; using the
+			// default path would strand the selected home's key and can touch a
+			// different home entirely.
+			credsPath, perr := cfg.CredentialsFilePath()
+			if perr != nil {
+				return configErr(perr)
 			}
 			switch which {
 			case "", "all":
 				if err := cfg.ClearTokens(); err != nil {
 					return configErr(fmt.Errorf("clearing tokens: %w", err))
 				}
-				if err := cliutil.ClearITADCredentialForConfig(configPath); err != nil {
+				if err := cliutil.ClearITADCredentialAt(credsPath); err != nil {
 					return configErr(fmt.Errorf("clearing IsThereAnyDeal token: %w", err))
 				}
 			case "rawg":
@@ -334,7 +354,7 @@ func newAuthLogoutCmd(flags *rootFlags) *cobra.Command {
 					return configErr(fmt.Errorf("clearing tokens: %w", err))
 				}
 			case "itad", "isthereanydeal":
-				if err := cliutil.ClearITADCredentialForConfig(configPath); err != nil {
+				if err := cliutil.ClearITADCredentialAt(credsPath); err != nil {
 					return configErr(fmt.Errorf("clearing IsThereAnyDeal token: %w", err))
 				}
 			default:
