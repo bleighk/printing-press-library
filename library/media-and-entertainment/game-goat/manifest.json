@@ -3,7 +3,7 @@
   "name": "game-goat-pp-mcp",
   "display_name": "Rawg Video Games",
   "version": "4.32.5",
-  "description": "Look up any game and find what to play next - RAWG search, ratings, franchise order, and tag-matched recommendations with remake-aware title resolution, built for agents.",
+  "description": "Look up any game and find what to play next - RAWG search, ratings, franchise order, tag-matched recommendations with remake-aware title resolution, plus IsThereAnyDeal historical price tracking and currency-localised storefront prices, built for agents.",
   "author": {
     "name": "CLI Printing Press"
   },
