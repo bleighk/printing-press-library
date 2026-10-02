@@ -245,7 +245,7 @@ type SearchOptions struct {
 type BrowseOptions struct {
 	Types        []AppType
 	FreeOnly     bool
-	TagIDs       []int
+	TagIDs       []int // every listed tag is required (AND across tags)
 	ComingSoon   bool
 	ReleasedOnly bool
 	Start        int
@@ -450,7 +450,13 @@ func (c *Client) Browse(ctx context.Context, opts BrowseOptions) (*Page, error) 
 		filters["released_only"] = true
 	}
 	if len(opts.TagIDs) > 0 {
-		filters["tagids_must_match"] = []map[string]any{{"tagids": opts.TagIDs}}
+		// The service ORs tagids within one group and ANDs across groups, so
+		// one group per tag makes every listed tag required.
+		groups := make([]map[string]any, 0, len(opts.TagIDs))
+		for _, id := range opts.TagIDs {
+			groups = append(groups, map[string]any{"tagids": []int{id}})
+		}
+		filters["tagids_must_match"] = groups
 	}
 	payload := map[string]any{
 		"query": map[string]any{
@@ -655,6 +661,10 @@ func splitTitleYear(title string) (string, int) {
 // candidates stay indistinguishable it returns ErrAmbiguousApp rather than
 // guessing, because presenting another edition's reviews and price as the
 // requested game's is worse than reporting no Steam data.
+//
+// A supplied year is binding: whether passed explicitly or parsed from a
+// "(YYYY)" suffix, a candidate whose release year falls outside the one-year
+// window is never accepted, even when it is the only name match.
 func (c *Client) ResolveAppIDWithHint(ctx context.Context, title string, year int) (int64, error) {
 	base, suffixYear := splitTitleYear(title)
 	if year == 0 {
@@ -675,6 +685,10 @@ func (c *Client) ResolveAppIDWithHint(ctx context.Context, title string, year in
 		if picked, ok := pickByYear(matches, year); ok {
 			return picked.AppID, nil
 		}
+		if !anyWithinAYear(matches, year) {
+			return 0, fmt.Errorf("%w: %q (no exact store match released within a year of %d; candidates: %s)", ErrAppNotFound, title, year, describeItems(matches))
+		}
+		return 0, ambiguousError(title, matches)
 	}
 	if len(matches) == 1 {
 		return matches[0].AppID, nil
@@ -729,6 +743,18 @@ func withinAYear(item StoreItem, year int) bool {
 	}
 	delta := y - year
 	return delta >= -1 && delta <= 1
+}
+
+// anyWithinAYear reports whether any candidate falls in the requested year or
+// within one year of it. When pickByYear fails, this distinguishes genuine
+// ambiguity from a year with no plausible match.
+func anyWithinAYear(matches []StoreItem, year int) bool {
+	for _, m := range matches {
+		if m.ReleasesInYear(year) || withinAYear(m, year) {
+			return true
+		}
+	}
+	return false
 }
 
 func ambiguousError(title string, matches []StoreItem) error {

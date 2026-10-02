@@ -432,6 +432,41 @@ func TestBrowseEncodesFiltersAndPagination(t *testing.T) {
 	}
 }
 
+func TestBrowseRequiresEveryTag(t *testing.T) {
+	var seen map[string]any
+	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case queryPath:
+			seen = inputJSON(t, r)
+			fmt.Fprintf(w, `{"response":{"metadata":{"total_matching_records":0,"start":0,"count":0},"store_items":[]}}`)
+		case getTagListPath:
+			fmt.Fprint(w, tagListFixture)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	})
+
+	_, err := c.Browse(context.Background(), BrowseOptions{
+		Types:  []AppType{AppTypeGame},
+		TagIDs: []int{1716, 1628},
+	})
+	if err != nil {
+		t.Fatalf("Browse: %v", err)
+	}
+	tags := object(t, seen, "query", "filters")["tagids_must_match"]
+	list, ok := tags.([]any)
+	if !ok || len(list) != 2 {
+		t.Fatalf("tagids_must_match = %v, want two groups", tags)
+	}
+	for i, want := range []float64{1716, 1628} {
+		entry, _ := list[i].(map[string]any)
+		ids, _ := entry["tagids"].([]any)
+		if len(ids) != 1 || ids[0] != want {
+			t.Errorf("group %d tagids = %v, want [%v]", i, entry["tagids"], want)
+		}
+	}
+}
+
 func TestBrowseEmptyPageIsNotAnError(t *testing.T) {
 	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == getTagListPath {
@@ -642,6 +677,17 @@ func TestResolveAppIDWithHint(t *testing.T) {
 			cands:     []candidate{{7, "Foo", 2017}},
 			wantID:    7,
 			wantQuery: "Foo",
+		}, {
+			name:    "requested year rejects a lone match outside the window",
+			title:   "Foo (2016)",
+			cands:   []candidate{{7, "Foo", 2023}},
+			wantErr: ErrAppNotFound,
+		}, {
+			name:    "explicit year rejects a lone match outside the window",
+			title:   "Foo",
+			year:    2016,
+			cands:   []candidate{{7, "Foo", 2023}},
+			wantErr: ErrAppNotFound,
 		}, {
 			name:    "two same-name same-year apps are ambiguous",
 			title:   "DOOM",

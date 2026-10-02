@@ -18,6 +18,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -328,12 +329,17 @@ sources_missing rather than failing the command.
 				row.Reviews = &review
 			} else {
 				meta.SourcesMissing = []string{"steam_reviews"}
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: steam reviews unavailable for appid %d: %v\n", appid, rerr)
 			}
 			view := steamAppView{Meta: meta, Results: []steamAppRow{row}}
 			if !wantsHumanTable(cmd.OutOrStdout(), flags) {
 				return printJSONFiltered(cmd.OutOrStdout(), view, flags)
 			}
-			return renderSteamItems(cmd, fmt.Sprintf("Steam app %d: %s", row.AppID, row.Name), []steam.StoreItem{row.StoreItem})
+			if err := renderSteamItems(cmd, fmt.Sprintf("Steam app %d: %s", row.AppID, row.Name), []steam.StoreItem{row.StoreItem}); err != nil {
+				return err
+			}
+			renderSteamReviewLine(cmd.OutOrStdout(), row.Reviews)
+			return nil
 		},
 	}
 
@@ -355,8 +361,8 @@ func newSteamBrowseCmd(flags *rootFlags) *cobra.Command {
 		Long: `Walk the Steam catalog page by page with real pagination.
 
 Filters: --type selects app types, --free keeps free items only, --tag keeps
-items carrying a store tag (name or tagid, repeatable), and --coming-soon /
---released restrict to unreleased or released items. --page/--limit page through
+items carrying a store tag (name or tagid, repeatable or comma-separated), and
+--coming-soon / --released restrict to unreleased or released items. --page/--limit page through
 the result set; meta carries total, page, limit, and next_page.
 
 "Every free demo in a region" is therefore:
@@ -449,7 +455,7 @@ so --type bundle is rejected rather than silently returning nothing.
 	}
 
 	cmd.Flags().StringVar(&typesCSV, "type", "game", steamTypeFlagHelp)
-	cmd.Flags().StringArrayVar(&tags, "tag", nil, "Store tag name or tagid to require (repeatable, e.g. --tag Roguelike)")
+	cmd.Flags().StringSliceVar(&tags, "tag", nil, "Store tag name or tagid to require (repeatable or comma-separated, e.g. --tag Roguelike,Metroidvania)")
 	cmd.Flags().BoolVar(&freeOnly, "free", false, "Only free items (free to play, free demos)")
 	cmd.Flags().BoolVar(&comingSoon, "coming-soon", false, "Only unreleased items")
 	cmd.Flags().BoolVar(&releasedOnly, "released", false, "Only released items")
@@ -458,6 +464,29 @@ so --type bundle is rejected rather than silently returning nothing.
 	cmd.Flags().StringVar(&country, "country", "", "ISO 3166-1 alpha-2 storefront region (default STEAM_COUNTRY, ITAD_COUNTRY, or US)")
 	cmd.Flags().StringVar(&lang, "lang", "", "Store locale for store text (default english)")
 	return cmd
+}
+
+// renderSteamReviewLine is the human review rollup for the steam app
+// command, including the unavailable marker when the review source was
+// dropped.
+func renderSteamReviewLine(w io.Writer, review *steam.ReviewSummary) {
+	if review == nil {
+		fmt.Fprintln(w, "Reviews: unavailable (sources_missing: steam_reviews)")
+		return
+	}
+	total := review.Total
+	if total == 0 {
+		total = review.Positive + review.Negative
+	}
+	desc := review.Desc
+	if desc == "" {
+		desc = "-"
+	}
+	if total > 0 {
+		fmt.Fprintf(w, "Reviews: %s (%d%% positive of %d)\n", desc, review.Positive*100/total, total)
+		return
+	}
+	fmt.Fprintf(w, "Reviews: %s (no reviews yet)\n", desc)
 }
 
 // renderSteamItems is the human table for search, browse, and app.

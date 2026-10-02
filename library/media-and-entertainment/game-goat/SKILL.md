@@ -220,7 +220,7 @@ The keyless store search returns typed records: app type, release date, platform
 game-goat-pp-cli steam browse --type demo --free --country DE --page 2 --agent
 ```
 
-Filtered catalog browse with real pagination: `--type`, `--free`, `--tag <name|tagid>`, and `--coming-soon`/`--released`. `meta` carries `total`, `page`, `limit`, and `next_page`. Free-to-play and early access are attributes of a record rather than app types, so `--free` is how you ask for them.
+Filtered catalog browse with real pagination: `--type`, `--free`, `--tag <name|tagid>` (repeat it or comma-separate; every tag is required), and `--coming-soon`/`--released`. `meta` carries `total`, `page`, `limit`, and `next_page`. Free-to-play and early access are attributes of a record rather than app types, so `--free` is how you ask for them.
 
 The full Steam data-source note (which endpoints are used, why `STEAM_API_KEY` is not needed, and the bundle limitation) is the "Steam data sources" section of the README.
 
