@@ -23,7 +23,7 @@ Branch `feat/game-goat-steam-store` off upstream/main `5d0984cb6`, CLI dir
 | skill docs | `cli-printing-press verify-skill --dir <cli>` | PASS (flag-names, flag-commands, positional-args, shell-var-quotes, unknown-command, canonical-sections) |
 | MCP surface | `tools/list` against the built MCP binary | 68 tools (was 65): `steam_app`, `steam_browse`, `steam_search` added, nothing removed |
 | agent surface | `agent-context` / `which` | `steam` listed; `which "search the steam store"` -> `steam search` (score 9) |
-| naming gate | `grep -rn "Rawg Video Games"` | 0 hits |
+| naming gate | `grep -rn "Rawg Video Game[s]"` | 0 hits |
 
 ## New offline tests
 

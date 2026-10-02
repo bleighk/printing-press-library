@@ -57,7 +57,7 @@ The hardcoded cc=us&l=en in storesearch/appdetails is replaced by client config.
 ## F5 — display name "Game GOAT" (bug, ask 2)
 .printing-press.json, manifest.json (display_name + MCP env description), auth.go Short, MCP server name, root.go
 Short/Long, README/SKILL/AGENTS headings, agentcookie.toml. Delete .printing-press.json.pre-name-fix.
-Gate: zero hits for "Rawg Video Games".
+Gate: `grep -rn "Rawg Video Game[s]"` returns zero hits (the bracket keeps this doc out of its own match).
 
 ## F6 — document the API tradeoff (feature, ask 1f)
 Help Long text, README + SKILL "Steam data sources" note, recipes, command reference, internal/source/steam/README.md.
