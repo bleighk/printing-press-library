@@ -2,7 +2,7 @@
 # See docs/spec-agentcookie-secrets-bus-v2-adoption.md
 schema_version = 2
 name = "game-goat-pp-cli"
-display_name = "Rawg Video Games"
+display_name = "Game GOAT"
 description = "Pick tonight's game and shrink the backlog - RAWG discovery plus a local decision-debt ledger that tells you what you will actually finish."
 project_kind = "cli"
 

@@ -48,7 +48,7 @@ func main() {
 		os.Exit(1)
 	}
 	s := server.NewMCPServer(
-		"Rawg Video Games",
+		"Game GOAT",
 		version,
 		server.WithToolCapabilities(false),
 	)

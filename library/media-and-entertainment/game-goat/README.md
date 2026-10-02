@@ -1,6 +1,6 @@
-# Game Goat CLI
+# Game GOAT
 
-**Look up any game and find what to play next - RAWG search, ratings, franchise order, tag-matched recommendations with remake-aware title resolution, plus IsThereAnyDeal historical price tracking and currency-localised storefront prices, built for agents.**
+**Look up any game, find what to play next, and browse the Steam store from one CLI - RAWG search and ratings, remake-aware title resolution, and IsThereAnyDeal price history.**
 
 ## Install
 
@@ -145,6 +145,8 @@ These capabilities aren't available in any other tool for this API.
 - **`retention`** — Community completion and drop verdict for one game from RAWG added_by_status counts (needs RAWG_API_KEY).
 - **`price-history`** — Historical price tracking for one game: all-time / 1-year / 3-month lows, the current best storefront price, a dated change log, and a buy-now verdict, localised to a --country currency (needs ITAD_API_KEY).
 - **`prices`** — Current prices across storefronts, cheapest first, with a --deals-only filter and the all-time low for context, localised to a --country currency (needs ITAD_API_KEY).
+- **`steam search`** — Plural keyless search of the Steam store across games, demos, DLC, soundtracks, software, video, mods, and hardware, with store tags, price, release date, platforms, and demo links on every row.
+- **`steam browse`** — Paginated Steam catalog browse filtered by app type, free-only, store tag, and coming-soon/released, localised with `--country`; "every free demo in my region" is one command.
 
 ## Recipes
 
@@ -189,6 +191,45 @@ game-goat-pp-cli prices "elden ring" --country GB --deals-only --json
 ```
 
 Current price at every storefront, cheapest first, plus the all-time low for context. `--deals-only` keeps just active discounts; `--limit` caps the rows.
+
+### Search the Steam store
+
+```bash
+game-goat-pp-cli steam search "hollow knight" --json --select results.name,results.price,results.release_date
+```
+
+The keyless store search returns typed records: app type, release date, platforms, store tags, price, and the app's own demo links. `--type` takes a comma-separated list (game, demo, dlc, soundtrack, software, video, mod, hardware) and `--limit` goes up to 100. Text search has no second page — Valve's search service ignores an offset — so use `steam browse` when you need to page.
+
+### Every free demo in my region
+
+```bash
+game-goat-pp-cli steam browse --type demo --free --country DE --page 2 --agent
+```
+
+Filtered catalog browse with real pagination: `--type`, `--free`, `--tag <name|tagid>`, and `--coming-soon`/`--released`. `meta` carries `total`, `page`, `limit`, and `next_page`. Free-to-play and early access are attributes of a record rather than app types, so `--free` is how you ask for them.
+
+## Steam data sources
+
+The `steam` commands talk to Valve's store services directly and need no API key.
+
+The documented developer API at https://partner.steamgames.com/doc/api is key-gated, and its only catalog enumerator — `IStoreService/GetAppList` — requires a Steam Web API key and cannot filter by demo, tag, or price. It also has no "list demos" endpoint. So this CLI uses the keyless store services the Steam store itself calls:
+
+| Surface | Used for |
+|---------|----------|
+| `IStoreQueryService/SearchSuggestions` | text search across app types (up to 100 results) |
+| `IStoreQueryService/Query` | filtered, paginated catalog enumeration |
+| `IStoreBrowseService/GetItems` | full typed app records, including demo links |
+| `IStoreService/GetTagList` | tag id to tag name |
+| `store.steampowered.com/api/storesearch`, `/appdetails`, `/appreviews` | title to appid, current price, review scores |
+
+Consequences worth knowing:
+
+- **STEAM_API_KEY is not used.** The key-gated Web API (players, achievements, stats) is covered by the separate `steam-web` CLI.
+- The four store services are not documented on the partner site, so their response shape could change; the client decodes them into typed records and pins the observed shapes in tests.
+- Store results follow `--country` (default `STEAM_COUNTRY`, then `ITAD_COUNTRY`, then US) and `--lang`, so prices and availability come back localised like the IsThereAnyDeal path.
+- Bundles cannot be enumerated: the store services expose no bundle filter, so `--type bundle` is rejected with that explanation instead of silently returning nothing.
+- `ratings` reads the Steam appid from RAWG's own Steam store link for the game, which is exact, and only falls back to a store-aware title search. That is why rating a remake resolves instead of failing with `steam: no Steam app matched the title: "DOOM (2016)"`.
+- Steam enrichment never fails a command: a Steam problem degrades the card and lists the source in `sources_missing`.
 
 ## Usage
 
@@ -242,6 +283,8 @@ Precedence matters in fleets: an ambient per-kind variable such as `GAME_GOAT_DA
 Relocation is one-way. Unsetting `GAME_GOAT_HOME` does not move files back to platform defaults, and `doctor` cannot find credentials left under a former root. Move the files manually before unsetting relocation variables.
 
 Existing installs keep working because the platform-default rung matches the legacy layout. On the first auth write, stored secrets leave `config.toml` and are consolidated into `credentials.toml` under the data directory. Run `game-goat-pp-cli doctor --fail-on warn` to check path and credential-location warnings in automation.
+
+Steam store localisation uses `STEAM_COUNTRY` (falling back to `ITAD_COUNTRY`, then `US`) and `STEAM_LANG`. `STEAM_STORE_BASE_URL` and `STEAM_STORE_API_BASE_URL` override the two Steam hosts, which is useful for tests and mirrors.
 
 ## Commands
 
@@ -308,6 +351,14 @@ Manage tags
 - **`game-goat-pp-cli tags list`** - Get a list of tags.
 - **`game-goat-pp-cli tags read`** - Get details of the tag.
 
+
+### steam
+
+Keyless Steam store catalog.
+
+- **`game-goat-pp-cli steam search <term>`** — Search the Steam store catalog for games, demos, DLC, soundtracks, and more.
+- **`game-goat-pp-cli steam app <appid|title>`** — One full typed Steam store record, including demo links and the review summary.
+- **`game-goat-pp-cli steam browse`** — Paginated Steam catalog browse with type, free, tag, and release filters.
 
 ### Self-learning loop
 

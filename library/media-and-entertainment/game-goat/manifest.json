@@ -1,9 +1,9 @@
 {
   "manifest_version": "0.3",
   "name": "game-goat-pp-mcp",
-  "display_name": "Rawg Video Games",
+  "display_name": "Game GOAT",
   "version": "4.32.5",
-  "description": "Look up any game and find what to play next - RAWG search, ratings, franchise order, tag-matched recommendations with remake-aware title resolution, plus IsThereAnyDeal historical price tracking and currency-localised storefront prices, built for agents.",
+  "description": "Look up any game, find what to play next, and browse the Steam store from one CLI - RAWG search and ratings, remake-aware title resolution, and IsThereAnyDeal price history.",
   "author": {
     "name": "CLI Printing Press"
   },
@@ -24,7 +24,7 @@
     "rawg_api_key": {
       "type": "string",
       "title": "RAWG_API_KEY",
-      "description": "Sets RAWG_API_KEY for the Rawg Video Games MCP server. Get a credential from https://rawg.io/apidocs.",
+      "description": "Sets RAWG_API_KEY for the Game GOAT MCP server. Get a credential from https://rawg.io/apidocs.",
       "sensitive": true,
       "required": true
     },

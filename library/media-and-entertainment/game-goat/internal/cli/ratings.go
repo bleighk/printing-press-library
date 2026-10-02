@@ -128,13 +128,6 @@ func steamLookupName(title string, game rawgGame) string {
 	return title
 }
 
-// steamReviewGraceful fetches keyless Steam review enrichment for a title.
-// Errors return typed; every caller degrades to RAWG + Metacritic plus
-// sources_missing:["steam"] instead of failing the whole command.
-func steamReviewGraceful(ctx context.Context, title string) (*steam.SteamReview, error) {
-	return steam.SteamReviewForTitle(ctx, title)
-}
-
 // formatSteamPrice renders an appdetails price block for humans.
 func formatSteamPrice(p *steam.PriceOverview) string {
 	if p == nil || p.Final <= 0 {
@@ -173,6 +166,9 @@ type ratingsMeta struct {
 	ResolvedBy     string               `json:"resolved_by"`
 	Ambiguous      []ambiguousCandidate `json:"ambiguous,omitempty"`
 	SourcesMissing []string             `json:"sources_missing,omitempty"`
+	// SteamResolvedBy records how the Steam appid was found
+	// ("rawg-store-link" or "title") so the card shows its provenance.
+	SteamResolvedBy string `json:"steam_resolved_by,omitempty"`
 }
 
 type ratingsCard struct {
@@ -325,10 +321,14 @@ bare-numeric argument is a RAWG id, matching retention and games get.`,
 				meta.Ambiguous = candidates
 			}
 			// Keyless Steam enrichment: never fail the whole command for it.
-			steamReview, serr := steamReviewGraceful(ctx, steamLookupName(title, game))
+			// The appid comes from RAWG's Steam store link first, because that
+			// is exact; the store-aware title search is the fallback.
+			steamReview, steamResolvedBy, serr := steamEnrichmentForGame(ctx, c, game, title)
 			if serr != nil {
 				meta.SourcesMissing = []string{"steam"}
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: steam enrichment unavailable for %q: %v\n", title, serr)
+			} else {
+				meta.SteamResolvedBy = steamResolvedBy
 			}
 			card := buildRatingsCard(game, steamReview)
 			view := ratingsView{Meta: meta, Results: []ratingsCard{card}}

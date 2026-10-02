@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,9 +42,20 @@ var (
 
 // Client is the typed keyless Steam storefront client.
 type Client struct {
-	// BaseURL is overridable so tests can point at an httptest server.
+	// BaseURL is the storefront host (storesearch/appdetails) and is
+	// overridable so tests can point at an httptest server.
 	BaseURL string
-	doer    *adaptiveDoer
+	// APIBaseURL is the keyless store-SERVICES host (IStoreQueryService,
+	// IStoreBrowseService, IStoreService), also test-overridable.
+	APIBaseURL string
+	// Country is the ISO 3166-1 alpha-2 storefront region.
+	Country string
+	// Language is the store locale.
+	Language string
+	doer     *adaptiveDoer
+
+	tagMu    sync.Mutex
+	tagCache map[int]string
 }
 
 // New builds a Steam client from cfg (nil falls back to NewConfig). The
@@ -53,8 +65,11 @@ func New(cfg *Config) *Client {
 		cfg = NewConfig()
 	}
 	return &Client{
-		BaseURL: DefaultBaseURL,
-		doer:    newAdaptiveDoer(&http.Client{Timeout: httpTimeout}, cfg.RateLimit, DefaultBurst),
+		BaseURL:    DefaultBaseURL,
+		APIBaseURL: DefaultAPIBaseURL,
+		Country:    cfg.Country,
+		Language:   cfg.Language,
+		doer:       newAdaptiveDoer(&http.Client{Timeout: httpTimeout}, cfg.RateLimit, DefaultBurst),
 	}
 }
 
@@ -76,7 +91,9 @@ func normalizeName(s string) string {
 // first app-typed exact-title match. An empty result set is the typed
 // ErrAppNotFound.
 func (c *Client) ResolveAppID(ctx context.Context, title string) (int64, error) {
-	endpoint := fmt.Sprintf("%s/api/storesearch/?term=%s&cc=us&l=en", c.BaseURL, url.QueryEscape(title))
+	// Region/locale come from the client so store results are localisable like
+	// the IsThereAnyDeal path instead of pinned to the US/en storefront.
+	endpoint := fmt.Sprintf("%s/api/storesearch/?term=%s&cc=%s&l=%s", c.BaseURL, url.QueryEscape(title), c.countryCode(), c.languageName())
 	body, err := c.doer.get(ctx, endpoint, c.headers())
 	if err != nil {
 		return 0, err
@@ -171,7 +188,7 @@ type AppDetails struct {
 // json.RawMessage to tolerate the dynamic key. success:false is the typed
 // ErrAppNotFound.
 func (c *Client) AppDetails(ctx context.Context, appid int64) (*AppDetails, error) {
-	endpoint := fmt.Sprintf("%s/api/appdetails?appids=%d&cc=us&l=en", c.BaseURL, appid)
+	endpoint := fmt.Sprintf("%s/api/appdetails?appids=%d&cc=%s&l=%s", c.BaseURL, appid, c.countryCode(), c.languageName())
 	body, err := c.doer.get(ctx, endpoint, c.headers())
 	if err != nil {
 		return nil, err

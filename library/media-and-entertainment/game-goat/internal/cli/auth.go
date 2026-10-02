@@ -19,7 +19,7 @@ import (
 func newAuthCmd(flags *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:         "auth",
-		Short:       "Manage authentication for Rawg Video Games",
+		Short:       "Manage authentication for Game GOAT",
 		Annotations: map[string]string{"pp:parent-group": "true"},
 		RunE:        parentNoSubcommandRunE(flags),
 	}

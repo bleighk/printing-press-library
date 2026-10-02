@@ -1250,7 +1250,7 @@ func handleContextResult(s *server.MCPServer, _ context.Context, _ mcplib.CallTo
 	}
 	ctx := map[string]any{
 		"api":         "game-goat",
-		"description": "Look up any game and find what to play next - RAWG search, ratings, franchise order, tag-matched recommendations with remake-aware title resolution, plus IsThereAnyDeal historical price tracking and currency-localised storefront prices, built for agents.",
+		"description": "Look up any game, find what to play next, and browse the Steam store from one CLI - RAWG search and ratings, remake-aware title resolution, and IsThereAnyDeal price history.",
 		"archetype":   "generic",
 		"tool_count":  len(s.ListTools()),
 		"paths":       paths,

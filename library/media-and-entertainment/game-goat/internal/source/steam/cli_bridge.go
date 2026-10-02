@@ -30,13 +30,35 @@ func SteamReviewForTitle(ctx context.Context, title string) (*SteamReview, error
 	return enrichTitle(ctx, bridgeClient, title)
 }
 
-func enrichTitle(ctx context.Context, c *Client, title string) (*SteamReview, error) {
+// SteamReviewForApp returns the review rollup, plus the current price when
+// appdetails exposes one, for an appid that is already known — no title
+// resolution. Price failures degrade to Price=nil so the review block ships.
+func SteamReviewForApp(ctx context.Context, appid int64) (*SteamReview, error) {
+	return enrichAppID(ctx, bridgeClient, appid)
+}
+
+// SteamReviewForTitleWithYear is the store-aware title path: it resolves
+// through the plural store search with a release-year hint (so "(YYYY)"
+// suffixes and remake collisions resolve), then fetches the review block.
+func SteamReviewForTitleWithYear(ctx context.Context, title string, year int) (*SteamReview, error) {
+	return enrichTitleWithYear(ctx, bridgeClient, title, year)
+}
+
+func enrichTitleWithYear(ctx context.Context, c *Client, title string, year int) (*SteamReview, error) {
 	if c == nil {
 		c = New(nil)
 	}
-	appid, err := c.ResolveAppID(ctx, title)
+	appid, err := c.ResolveAppIDWithHint(ctx, title, year)
 	if err != nil {
 		return nil, err
+	}
+	return enrichAppID(ctx, c, appid)
+}
+
+// enrichAppID fetches the review rollup for a known appid.
+func enrichAppID(ctx context.Context, c *Client, appid int64) (*SteamReview, error) {
+	if c == nil {
+		c = New(nil)
 	}
 	summary, err := c.ReviewSummary(ctx, appid)
 	if err != nil {
@@ -55,4 +77,15 @@ func enrichTitle(ctx context.Context, c *Client, title string) (*SteamReview, er
 		review.Price = details.Price
 	}
 	return review, nil
+}
+
+func enrichTitle(ctx context.Context, c *Client, title string) (*SteamReview, error) {
+	if c == nil {
+		c = New(nil)
+	}
+	appid, err := c.ResolveAppID(ctx, title)
+	if err != nil {
+		return nil, err
+	}
+	return enrichAppID(ctx, c, appid)
 }

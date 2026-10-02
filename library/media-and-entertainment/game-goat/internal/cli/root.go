@@ -296,8 +296,8 @@ func isCobraUsageError(err error) bool {
 func newRootCmd(flags *rootFlags) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "game-goat-pp-cli",
-		Short: `Game Goat CLI — Look up any game and find what to play next - RAWG search, ratings, franchise order, tag-matched recommendations, plus IsThereAnyDeal price history and storefront prices…`,
-		Long: `Game Goat CLI — Look up any game and find what to play next - RAWG search, ratings, franchise order, tag-matched recommendations with remake-aware title resolution, plus IsThereAnyDeal historical price tracking and currency-localised storefront prices, built for agents.
+		Short: `Game GOAT — Look up any game and find what to play next - RAWG search, ratings, franchise order, tag-matched recommendations, plus IsThereAnyDeal price history and storefront prices…`,
+		Long: `Game GOAT — Look up any game, find what to play next, and browse the Steam store from one CLI - RAWG search and ratings, remake-aware title resolution, and IsThereAnyDeal price history.
 
 Highlights (not in the official API docs):
   • similar   Games like <title>: the seed's own studio first, then its defining gameplay tag (roguelite, metroidvania) found by tag-neighborhood co-occurrence, then a confidence-floored genre join. Every row carr…

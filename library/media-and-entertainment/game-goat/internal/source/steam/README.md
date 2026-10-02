@@ -57,3 +57,54 @@ appreviews parsing (incl. `success:false` → `ErrReviewsUnavailable`), the
 429 backoff-then-retry path (attempt-counted, real sleeps kept
 milliseconds), 5xx retry-once, non-retryable 4xx, appdetails dynamic-key
 parsing, and the bridge end-to-end including price degradation.
+
+## Store services (catalog enumeration)
+
+Catalog enumeration does not use the storefront host. It uses four keyless
+services on `https://api.steampowered.com`, with the payload URL-encoded in an
+`input_json` query parameter and the locale in `context{language,country_code}`:
+
+| Service | Purpose | Notes |
+|---------|---------|-------|
+| `IStoreQueryService/SearchSuggestions/v1/` | plural text search | up to 100 results; an offset is ignored, so text search has no second page |
+| `IStoreQueryService/Query/v1/` | filtered, paginated enumeration | `metadata.total_matching_records` drives paging; type / free / tag / coming-soon / released filters |
+| `IStoreBrowseService/GetItems/v1/` | batch appid to full record | one `store_items` entry per appid, including `related_items.demos` |
+| `IStoreService/GetTagList/v1/` | tagid to tag name | fetched once per process and cached on the client |
+
+These four are not listed in the partner documentation at
+https://partner.steamgames.com/doc/api, whose only catalog enumerator
+(`IStoreService/GetAppList`) needs a Steam Web API key and cannot filter by demo,
+tag, or price. No Steam API key is used anywhere in this client.
+
+## Region and locale
+
+Both hosts take the region from the client: `Config.Country` (default `US`) and
+`Config.Language` (default `english`), reaching the storefront as `cc`/`l` and the
+services as `context.country_code`/`context.language`. The CLI resolves the country
+as `--country`, then `STEAM_COUNTRY`, then `ITAD_COUNTRY`, then `US`, so one setting
+localises both the Steam store and the IsThereAnyDeal price path.
+
+## Catalog types and attributes
+
+`AppType` maps the service `type` integer: 0 game, 1 demo, 2 mod, 4 dlc, 6 software,
+7 video, 10 hardware, 11 soundtrack, anything else `other`. Free to play and early
+access are attributes rather than types (Steam models early access as a tag),
+so they live on `StoreItem.IsFree` and `StoreItem.EarlyAccess` plus the `--free` filter.
+Bundles cannot be enumerated: no keyless store service exposes a bundle filter,
+so `--type bundle` is rejected with that explanation from `typeFilters`.
+
+## Identity resolution
+
+`ResolveAppIDWithHint(ctx, title, year)` strips a trailing `(YYYY)`, searches games
+only, and breaks name collisions by release year: an exact year first, then a
+single candidate within a year. Anything else returns `ErrAmbiguousApp` with the
+candidate list instead of guessing. The CLI prefers a stronger source when it
+has one: the Steam store link RAWG records for the game, which is exact by
+construction.
+
+## Catalog tests
+
+`store_test.go` covers this layer offline against `httptest`: the taxonomy and flag
+parsing, request encoding of `context`, `type_filters`, `start`/`count`, `tagids` and
+`only_free_items`, response decoding, the tag-name merge, and
+`ResolveAppIDWithHint` selection (year tie-break, ambiguity, no match).
