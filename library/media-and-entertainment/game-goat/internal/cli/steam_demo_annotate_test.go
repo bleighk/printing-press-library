@@ -307,3 +307,123 @@ func TestSimilarWithDemosFlagWires(t *testing.T) {
 		}
 	}
 }
+
+// TestAnnotateCountsFailedStoreLookups: a failed RAWG /stores lookup is counted
+// and warned about once, while a game whose store list has no Steam link is not
+// a failure. Rows for failed lookups keep the demo fields absent.
+func TestAnnotateCountsFailedStoreLookups(t *testing.T) {
+	testenv.Isolate(t)
+	rawgLog := newDemosReqLog()
+	rawgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawgLog.record(r)
+		switch r.URL.Path {
+		case "/games":
+			fmt.Fprint(w, discoverGamesResponse())
+		case "/games/101/stores":
+			// Malformed JSON (status 200) is a failed lookup without a 5xx retry.
+			fmt.Fprint(w, "{\"results\":")
+		case "/games/102/stores":
+			fmt.Fprint(w, "{\"results\":[{\"store_id\":5,\"url\":\"https://www.gog.com/game/beta\"}]}")
+		case "/games/103/stores":
+			fmt.Fprint(w, "{\"results\":[{\"store_id\":1,\"url\":\"https://store.steampowered.com/app/503/Gamma/\"}]}")
+		default:
+			t.Errorf("unexpected RAWG path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer rawgSrv.Close()
+	withRAWGBaseURL(t, rawgSrv)
+
+	steamLog := newDemosReqLog()
+	steamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := steamLog.record(r)
+		if r.URL.Path != demosGetItemsPath {
+			t.Errorf("unexpected Steam path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		ids := getItemsIDs(t, p)
+		items := make([]string, 0, len(ids))
+		for range ids {
+			items = append(items, "{\"appid\":503,\"success\":1,\"visible\":true,\"name\":\"Gamma\",\"related_items\":{\"demos\":[{\"appid\":999}]}}")
+		}
+		fmt.Fprintf(w, "{\"response\":{\"store_items\":[%s]}}", strings.Join(items, ","))
+	}))
+	defer steamSrv.Close()
+	withSteamHook(t, steamSrv)
+
+	env, errOut, err := runDiscoverJSON(t, "--limit", "3", "--with-demos")
+	if err != nil {
+		t.Fatalf("discover --with-demos: %v", err)
+	}
+	if got := strings.Count(errOut, "warning: steam demo annotation:"); got != 1 {
+		t.Errorf("stderr warning count = %d, want exactly 1; stderr=%q", got, errOut)
+	}
+	if !strings.Contains(errOut, "1 of 3") {
+		t.Errorf("stderr = %q, want to mention 1 of 3", errOut)
+	}
+	results, _ := env["results"].([]any)
+	if len(results) != 3 {
+		t.Fatalf("results = %d, want 3", len(results))
+	}
+	for _, i := range []int{0, 1} {
+		row := results[i].(map[string]any)
+		if _, ok := row["has_demo"]; ok {
+			t.Errorf("results[%d].has_demo = %v, want absent (lookup failed)", i, row["has_demo"])
+		}
+	}
+	third := results[2].(map[string]any)
+	if third["has_demo"] != true {
+		t.Errorf("results[2].has_demo = %v, want true", third["has_demo"])
+	}
+}
+
+// TestAnnotateNoLinkIsNotAFailure: games that list only non-Steam stores are
+// simply not annotated; that is not a failed lookup and produces no warning.
+func TestAnnotateNoLinkIsNotAFailure(t *testing.T) {
+	testenv.Isolate(t)
+	twoGames := "{\"count\":2,\"results\":[" +
+		"{\"id\":101,\"name\":\"Alpha\",\"released\":\"2020-01-01\",\"rating\":4.0,\"ratings_count\":120}," +
+		"{\"id\":102,\"name\":\"Beta\",\"released\":\"2021-01-01\",\"rating\":3.5,\"ratings_count\":80}]}"
+	rawgLog := newDemosReqLog()
+	rawgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawgLog.record(r)
+		switch r.URL.Path {
+		case "/games":
+			fmt.Fprint(w, twoGames)
+		case "/games/101/stores":
+			fmt.Fprint(w, "{\"results\":[{\"store_id\":5,\"url\":\"https://www.gog.com/game/alpha\"}]}")
+		case "/games/102/stores":
+			fmt.Fprint(w, "{\"results\":[{\"store_id\":3,\"url\":\"https://store.playstation.com/game/beta\"}]}")
+		default:
+			t.Errorf("unexpected RAWG path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer rawgSrv.Close()
+	withRAWGBaseURL(t, rawgSrv)
+
+	steamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected Steam request %s (no Steam links means no GetItems)", r.URL.Path)
+	}))
+	defer steamSrv.Close()
+	withSteamHook(t, steamSrv)
+
+	env, errOut, err := runDiscoverJSON(t, "--limit", "2", "--with-demos")
+	if err != nil {
+		t.Fatalf("discover --with-demos: %v", err)
+	}
+	if strings.Contains(errOut, "steam demo annotation") {
+		t.Errorf("stderr = %q, want no demo-annotation warning for no-link games", errOut)
+	}
+	results, _ := env["results"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2", len(results))
+	}
+	for i, r := range results {
+		row := r.(map[string]any)
+		if _, ok := row["has_demo"]; ok {
+			t.Errorf("results[%d].has_demo = %v, want absent for a no-link game", i, row["has_demo"])
+		}
+	}
+}

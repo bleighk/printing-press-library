@@ -1,4 +1,5 @@
 // Copyright 2026 Brad Knight and contributors. Licensed under Apache-2.0. See LICENSE.
+// pp:data-source live — keyless Steam store services and storefront endpoints.
 // PATCH(amend-2026-10-02: expose the keyless Steam store catalog as a command group)
 //
 // steam.go - the `steam` command group: the store-catalog surface over

@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mvanhorn/printing-press-library/library/media-and-entertainment/game-goat/internal/source/steam"
@@ -1090,5 +1091,135 @@ func TestDemosParentTagsSurviveCompact(t *testing.T) {
 	first := results[0].(map[string]any)
 	if got, _ := first["parent_tags"].([]any); !reflect.DeepEqual(got, []any{"Roguelike"}) {
 		t.Errorf("compact row parent_tags = %v, want [Roguelike] (dropped by compaction?)", first["parent_tags"])
+	}
+}
+
+// TestDemosPartialParentLookupMarksSteamParent: a title batch whose parent
+// appids span two GetItems chunks must keep the rows the first chunk resolved
+// (parent_name present) and mark steam_parent, without failing the command.
+// The second chunk answers malformed JSON (status 200) so there is no 5xx retry.
+func TestDemosPartialParentLookupMarksSteamParent(t *testing.T) {
+	demosIsolateEnv(t)
+	log := newDemosReqLog()
+	items := make([]string, 0, 201)
+	for i := 0; i < 201; i++ {
+		items = append(items, demoItemJSON(int64(5000+i), fmt.Sprintf("Demo %d", i), int64(7000+i)))
+	}
+	var getItemsCalls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := log.record(r)
+		switch r.URL.Path {
+		case demosSearchPath:
+			fmt.Fprint(w, storeResponse(201, 0, 201, items))
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
+		case demosGetItemsPath:
+			if atomic.AddInt32(&getItemsCalls, 1) == 1 {
+				ids := getItemsIDs(t, p)
+				parts := make([]string, 0, len(ids))
+				for _, id := range ids {
+					parts = append(parts, parentItemJSON(id, fmt.Sprintf("Full game %d", id), ""))
+				}
+				fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
+				return
+			}
+			fmt.Fprint(w, `{"response":`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	withSteamHook(t, srv)
+
+	env, errOut, err := runDemosCmd(t, "--title", "portal", "--limit", "1000")
+	if err != nil {
+		t.Fatalf("partial parent lookup must not fail the command: %v", err)
+	}
+	results, _ := env["results"].([]any)
+	if len(results) != 201 {
+		t.Fatalf("results = %d, want 201", len(results))
+	}
+	first := results[0].(map[string]any)
+	if first["parent_name"] == nil {
+		t.Errorf("results[0].parent_name missing, want the first-chunk full-game name")
+	}
+	last := results[200].(map[string]any)
+	if _, ok := last["parent_name"]; ok {
+		t.Errorf("results[200].parent_name = %v, want absent for the failed chunk", last["parent_name"])
+	}
+	meta, _ := env["meta"].(map[string]any)
+	missing, _ := meta["sources_missing"].([]any)
+	found := false
+	for _, m := range missing {
+		if m == "steam_parent" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("meta.sources_missing = %v, want to contain steam_parent", meta["sources_missing"])
+	}
+	if !strings.Contains(errOut, "steam_parent") {
+		t.Errorf("stderr = %q, want a one-line warning naming steam_parent", errOut)
+	}
+	if strings.Contains(errOut, "steam_tags") {
+		t.Errorf("stderr = %q, must not name steam_tags when the tag list succeeded", errOut)
+	}
+}
+
+// TestDemosTagListFailureMarksSteamTags: when the tag dictionary fails, the
+// demo rows still carry the full game's NAME but no parent_tags, and the
+// envelope marks steam_tags instead of failing.
+func TestDemosTagListFailureMarksSteamTags(t *testing.T) {
+	demosIsolateEnv(t)
+	log := newDemosReqLog()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := log.record(r)
+		switch r.URL.Path {
+		case demosQueryPath:
+			fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(1001, "Demo A", 101)}))
+		case demosGetTagListPath:
+			fmt.Fprint(w, `{"response":`)
+		case demosGetItemsPath:
+			ids := getItemsIDs(t, p)
+			parts := make([]string, 0, len(ids))
+			for _, id := range ids {
+				parts = append(parts, parentItemJSON(id, fmt.Sprintf("Full game %d", id), `{"tagid":1716,"weight":7}`))
+			}
+			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	withSteamHook(t, srv)
+
+	env, errOut, err := runDemosCmd(t, "--limit", "20")
+	if err != nil {
+		t.Fatalf("tag-list failure must not fail the command: %v", err)
+	}
+	results, _ := env["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1 (rows survive)", len(results))
+	}
+	row := results[0].(map[string]any)
+	if row["parent_name"] == nil {
+		t.Errorf("parent_name must still be filled when only the tag dictionary failed")
+	}
+	if _, ok := row["parent_tags"]; ok {
+		t.Errorf("parent_tags must be absent when tag names are unavailable, got %v", row["parent_tags"])
+	}
+	meta, _ := env["meta"].(map[string]any)
+	missing, _ := meta["sources_missing"].([]any)
+	found := false
+	for _, m := range missing {
+		if m == "steam_tags" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("meta.sources_missing = %v, want to contain steam_tags", meta["sources_missing"])
+	}
+	if !strings.Contains(errOut, "steam_tags") {
+		t.Errorf("stderr = %q, want a one-line warning naming steam_tags", errOut)
 	}
 }

@@ -99,8 +99,11 @@ RAWG API: comma-separated ids or slugs for --genres/--tags/--platforms/
 				rows = append(rows, toGameRow(g))
 			}
 			if withDemos {
-				if aerr := annotateRowsWithSteamDemos(cmd, c, rows); aerr != nil {
+				failed, aerr := annotateRowsWithSteamDemos(cmd, c, rows)
+				if aerr != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: steam demo annotation unavailable: %v\n", aerr)
+				} else if failed > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: steam demo annotation: %d of %d Steam store-link lookups failed; demo state unknown for those rows\n", failed, len(rows))
 				}
 			}
 			view := discoverView{

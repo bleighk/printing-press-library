@@ -1,4 +1,5 @@
 // Copyright 2026 Brad Knight and contributors. Licensed under Apache-2.0. See LICENSE.
+// pp:data-source live — keyless Steam store services (demos listing, full-game names and tags).
 //
 // steam_demos.go - the `steam demos` surface: a demos-only listing (app
 // type = demo) that pairs each demo with the full game it belongs to.
@@ -9,6 +10,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -170,8 +172,18 @@ func newSteamDemosCmd(flags *rootFlags) *cobra.Command {
 
 			rows := demoRows(items)
 			if _, perr := attachDemoParentSummaries(ctx, c, rows); perr != nil {
-				meta.SourcesMissing = append(meta.SourcesMissing, "steam_parent")
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: steam full-game names unavailable (sources_missing: steam_parent): %v\n", perr)
+				// A plain error means every chunk failed; ErrPartialLookup means
+				// some chunks resolved. Either way the full-game source is
+				// incomplete. ErrTagNamesUnavailable is tracked separately.
+				if errors.Is(perr, steam.ErrPartialLookup) ||
+					(!errors.Is(perr, steam.ErrTagNamesUnavailable)) {
+					meta.SourcesMissing = appendUniqueSource(meta.SourcesMissing, "steam_parent")
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: steam full-game names unavailable (sources_missing: steam_parent): %v\n", perr)
+				}
+				if errors.Is(perr, steam.ErrTagNamesUnavailable) {
+					meta.SourcesMissing = appendUniqueSource(meta.SourcesMissing, "steam_tags")
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: steam tag names unavailable (sources_missing: steam_tags): %v\n", perr)
+				}
 			}
 
 			if !wantsHumanTable(cmd.OutOrStdout(), flags) {
@@ -203,7 +215,9 @@ func demoRows(items []steam.StoreItem) []steamDemoRow {
 // AppSummaries lookup over the unique parent appids on the page. The full
 // game's tags arrive in the same GetItems request as its name, so the page
 // stays at three requests. A failure is reported to the caller (so it can
-// degrade to sources_missing) but never drops the demo rows.
+// degrade to sources_missing) but never drops the demo rows: partial failures
+// still fill the rows whose chunks resolved because AppSummaries returns the
+// successful summaries alongside the error.
 func attachDemoParentSummaries(ctx context.Context, c *steam.Client, rows []steamDemoRow) ([]int64, error) {
 	seen := map[int64]bool{}
 	var ids []int64
@@ -217,9 +231,6 @@ func attachDemoParentSummaries(ctx context.Context, c *steam.Client, rows []stea
 		return nil, nil
 	}
 	summaries, err := c.AppSummaries(ctx, ids)
-	if err != nil {
-		return ids, err
-	}
 	for i := range rows {
 		summary, ok := summaries[rows[i].ParentAppID]
 		if !ok {
@@ -228,7 +239,18 @@ func attachDemoParentSummaries(ctx context.Context, c *steam.Client, rows []stea
 		rows[i].ParentName = summary.Name
 		rows[i].ParentTags = namedTagNames(summary.Tags)
 	}
-	return ids, nil
+	return ids, err
+}
+
+// appendUniqueSource adds src to list unless it is already present, so a
+// degradation can be recorded once even when several code paths report it.
+func appendUniqueSource(list []string, src string) []string {
+	for _, s := range list {
+		if s == src {
+			return list
+		}
+	}
+	return append(list, src)
 }
 
 // namedTagNames keeps the named tags in order, skipping entries the dictionary

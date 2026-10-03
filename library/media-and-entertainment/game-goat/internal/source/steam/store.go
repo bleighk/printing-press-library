@@ -72,6 +72,17 @@ const (
 // guessing; a wrong match presents another game's reviews and price.
 var ErrAmbiguousApp = errors.New("steam: title matched multiple store apps")
 
+// ErrPartialLookup: some GetItems chunks in a batched full-game lookup failed
+// while others succeeded. The returned map carries the successful chunks; the
+// error names the last failing chunk so callers mark the source as partial
+// (steam_parent) without discarding the rows they did resolve.
+var ErrPartialLookup = errors.New("steam: some full-game lookups failed")
+
+// ErrTagNamesUnavailable: the store tag dictionary could not be fetched, so
+// tag NAMES are missing even though the tag ids are present. Non-fatal: the
+// summaries stay usable and callers mark steam_tags rather than failing.
+var ErrTagNamesUnavailable = errors.New("steam: store tag names unavailable")
+
 // ErrAppHidden: the app exists but is hidden from anonymous store requests
 // (age or region gate). It is deliberately its own message rather than an
 // ErrAppNotFound wrap: wrapping made the CLI report a hidden app as "no Steam
@@ -713,6 +724,12 @@ type AppSummary struct {
 // Items. Tag.Name is filled from the cached tag dictionary — the same one
 // a demos page already fetched for its own rows — so the parent lookup adds no
 // request.
+//
+// A non-nil map returned alongside a non-nil error means PARTIAL data: some
+// requests succeeded and the map carries their summaries. ErrPartialLookup
+// marks whole chunks that failed; ErrTagNamesUnavailable marks a failed tag
+// dictionary (names missing, ids retained). Both can be joined. Only when
+// every chunk fails does it return (nil, err) as before.
 func (c *Client) AppSummaries(ctx context.Context, ids []int64) (map[int64]AppSummary, error) {
 	unique := dedupePositiveIDs(ids)
 	summaries := make(map[int64]AppSummary, len(unique))
@@ -743,25 +760,34 @@ func (c *Client) AppSummaries(ctx context.Context, ids []int64) (map[int64]AppSu
 	if len(chunks) > 0 && !requested {
 		return nil, lastErr
 	}
-	c.attachSummaryTagNames(ctx, summaries)
-	return summaries, nil
+	var partialErr error
+	if lastErr != nil {
+		partialErr = fmt.Errorf("%w: %w", ErrPartialLookup, lastErr)
+	}
+	var tagErr error
+	if err := c.attachSummaryTagNames(ctx, summaries); err != nil {
+		tagErr = fmt.Errorf("%w: %w", ErrTagNamesUnavailable, err)
+	}
+	return summaries, errors.Join(partialErr, tagErr)
 }
 
 // attachSummaryTagNames fills Tag.Name on each summary from the cached tag
-// dictionary, best-effort like attachTagNames: a dictionary failure leaves
-// ids usable.
-func (c *Client) attachSummaryTagNames(ctx context.Context, summaries map[int64]AppSummary) {
+// dictionary. It returns the dictionary error so AppSummaries can mark
+// steam_tags: a dictionary failure leaves the ids usable but the names
+// unknown.
+func (c *Client) attachSummaryTagNames(ctx context.Context, summaries map[int64]AppSummary) error {
 	if len(summaries) == 0 {
-		return
+		return nil
 	}
 	names, err := c.tagNames(ctx)
 	if err != nil {
-		return
+		return err
 	}
 	for id, summary := range summaries {
 		applyTagNames(summary.Tags, names)
 		summaries[id] = summary
 	}
+	return nil
 }
 
 // DemoLinks maps each appid to the demo appids GetItems reports for it. A found

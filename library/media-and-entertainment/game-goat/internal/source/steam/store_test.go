@@ -1285,3 +1285,49 @@ func TestAppSummariesOmitsHiddenApp(t *testing.T) {
 		t.Error("a hidden app must be absent from the summary map")
 	}
 }
+
+// TestAppSummariesPartialFailureSignals: when some GetItems chunks fail but
+// others succeed, AppSummaries returns the successful summaries alongside an
+// error wrapping ErrPartialLookup rather than discarding them. The second
+// chunk answers malformed JSON (status 200) so there is no 5xx retry.
+func TestAppSummariesPartialFailureSignals(t *testing.T) {
+	var calls int32
+	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case getItemsPath:
+			if atomic.AddInt32(&calls, 1) == 1 {
+				payload := inputJSON(t, r)
+				list, _ := payload["ids"].([]any)
+				parts := make([]string, 0, len(list))
+				for _, e := range list {
+					entry, _ := e.(map[string]any)
+					parts = append(parts, fmt.Sprintf(`{"appid":%v,"success":1,"visible":true,"name":"Name %v"}`, entry["appid"], entry["appid"]))
+				}
+				fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
+				return
+			}
+			fmt.Fprint(w, `{"response":`)
+		case getTagListPath:
+			fmt.Fprint(w, tagListFixture)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	})
+	ids := make([]int64, 0, 201)
+	for i := int64(1); i <= 201; i++ {
+		ids = append(ids, i)
+	}
+	summaries, err := c.AppSummaries(context.Background(), ids)
+	if !errors.Is(err, ErrPartialLookup) {
+		t.Fatalf("AppSummaries error = %v, want ErrPartialLookup", err)
+	}
+	if summaries == nil {
+		t.Fatal("summaries = nil, want the first chunk's names")
+	}
+	if summaries[1].Name != "Name 1" || summaries[200].Name != "Name 200" {
+		t.Errorf("summaries = %d entries, want the first chunk resolved", len(summaries))
+	}
+	if _, ok := summaries[201]; ok {
+		t.Errorf("summaries[201] present, want the failed chunk absent")
+	}
+}

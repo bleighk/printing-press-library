@@ -592,8 +592,11 @@ join over free-tier endpoints is by design.`,
 				notes = append(notes, "no tier produced a match")
 			}
 			if withDemos && len(results) > 0 {
-				if aerr := annotateSimilarSteamDemos(cmd, c, results); aerr != nil {
+				failed, aerr := annotateSimilarSteamDemos(cmd, c, results)
+				if aerr != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: steam demo annotation unavailable: %v\n", aerr)
+				} else if failed > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: steam demo annotation: %d of %d Steam store-link lookups failed; demo state unknown for those rows\n", failed, len(results))
 				}
 			}
 

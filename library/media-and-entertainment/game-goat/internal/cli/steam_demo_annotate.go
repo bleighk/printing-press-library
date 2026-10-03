@@ -8,10 +8,13 @@ package cli
 
 import (
 	"context"
+	"errors"
 
 	"github.com/mvanhorn/printing-press-library/library/media-and-entertainment/game-goat/internal/client"
 
 	"github.com/spf13/cobra"
+
+	"github.com/mvanhorn/printing-press-library/library/media-and-entertainment/game-goat/internal/source/steam"
 )
 
 // withDemosHelp is the shared --with-demos help text on discover and similar.
@@ -26,14 +29,18 @@ type steamDemoAnnotation struct {
 }
 
 // annotateSteamDemos resolves the Steam appid for each RAWG id and returns the
-// demo annotation for every id whose Steam record was found. A RAWG id with no
-// Steam store link (or a failed lookup) is simply absent from the map. The
-// batching is deliberate: one /stores request per RAWG id, then a single Steam
-// DemoLinks call that chunks itself at 200 appids.
-func annotateSteamDemos(ctx context.Context, c *client.Client, rawgIDs []int) (map[int]steamDemoAnnotation, error) {
+// demo annotation for every id whose Steam record was found, the count of RAWG
+// /stores lookups that FAILED, and a transport error.
+//
+// A game whose store list is fine but contains no Steam link comes back as
+// steam.ErrAppNotFound — that is a legitimate "no link" and is not counted as
+// a failure; only real transport/parse failures are. The batching is
+// deliberate: one /stores request per RAWG id, then a single Steam DemoLinks
+// call that chunks itself at 200 appids.
+func annotateSteamDemos(ctx context.Context, c *client.Client, rawgIDs []int) (map[int]steamDemoAnnotation, int, error) {
 	out := make(map[int]steamDemoAnnotation)
 	if c == nil || len(rawgIDs) == 0 {
-		return out, nil
+		return out, 0, nil
 	}
 	type target struct {
 		rawgID int
@@ -41,23 +48,30 @@ func annotateSteamDemos(ctx context.Context, c *client.Client, rawgIDs []int) (m
 	}
 	targets := make([]target, 0, len(rawgIDs))
 	appids := make([]int64, 0, len(rawgIDs))
+	failed := 0
 	for _, rawgID := range rawgIDs {
 		if rawgID <= 0 {
 			continue
 		}
 		appid, err := steamAppIDForRAWGGame(ctx, c, rawgID)
-		if err != nil || appid <= 0 {
+		if err != nil {
+			if !errors.Is(err, steam.ErrAppNotFound) {
+				failed++
+			}
+			continue
+		}
+		if appid <= 0 {
 			continue
 		}
 		targets = append(targets, target{rawgID: rawgID, appid: appid})
 		appids = append(appids, appid)
 	}
 	if len(appids) == 0 {
-		return out, nil
+		return out, failed, nil
 	}
 	links, err := newSteamClient("", "").DemoLinks(ctx, appids)
 	if err != nil {
-		return nil, err
+		return nil, failed, err
 	}
 	for _, tgt := range targets {
 		demos, ok := links[tgt.appid]
@@ -69,19 +83,20 @@ func annotateSteamDemos(ctx context.Context, c *client.Client, rawgIDs []int) (m
 		}
 		out[tgt.rawgID] = steamDemoAnnotation{SteamAppID: tgt.appid, HasDemo: len(demos) > 0, DemoAppIDs: demos}
 	}
-	return out, nil
+	return out, failed, nil
 }
 
 // annotateRowsWithSteamDemos fills the Steam demo fields on discover rows in
 // place. Individual misses are left absent, matching the JSON omitempty shape.
-func annotateRowsWithSteamDemos(cmd *cobra.Command, c *client.Client, rows []gameRow) error {
+// It returns the number of failed RAWG /stores lookups so the caller can warn.
+func annotateRowsWithSteamDemos(cmd *cobra.Command, c *client.Client, rows []gameRow) (int, error) {
 	ids := make([]int, 0, len(rows))
 	for _, r := range rows {
 		ids = append(ids, r.ID)
 	}
-	annotations, err := annotateSteamDemos(cmd.Context(), c, ids)
+	annotations, failed, err := annotateSteamDemos(cmd.Context(), c, ids)
 	if err != nil {
-		return err
+		return failed, err
 	}
 	for i := range rows {
 		ann, ok := annotations[rows[i].ID]
@@ -93,19 +108,19 @@ func annotateRowsWithSteamDemos(cmd *cobra.Command, c *client.Client, rows []gam
 		rows[i].HasDemo = &has
 		rows[i].DemoAppIDs = ann.DemoAppIDs
 	}
-	return nil
+	return failed, nil
 }
 
 // annotateSimilarSteamDemos is the similar-row counterpart of
 // annotateRowsWithSteamDemos.
-func annotateSimilarSteamDemos(cmd *cobra.Command, c *client.Client, results []similarResult) error {
+func annotateSimilarSteamDemos(cmd *cobra.Command, c *client.Client, results []similarResult) (int, error) {
 	ids := make([]int, 0, len(results))
 	for _, r := range results {
 		ids = append(ids, r.ID)
 	}
-	annotations, err := annotateSteamDemos(cmd.Context(), c, ids)
+	annotations, failed, err := annotateSteamDemos(cmd.Context(), c, ids)
 	if err != nil {
-		return err
+		return failed, err
 	}
 	for i := range results {
 		ann, ok := annotations[results[i].ID]
@@ -117,7 +132,7 @@ func annotateSimilarSteamDemos(cmd *cobra.Command, c *client.Client, results []s
 		results[i].HasDemo = &has
 		results[i].DemoAppIDs = ann.DemoAppIDs
 	}
-	return nil
+	return failed, nil
 }
 
 // steamDemoCell renders a known demo state for a human table; unknown is "-".
