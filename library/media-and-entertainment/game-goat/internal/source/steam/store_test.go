@@ -1101,14 +1101,17 @@ func TestSearchPageReportsTotalAndEmptyIsNotError(t *testing.T) {
 	}
 }
 
-func TestAppNamesChunksAndSkipsTags(t *testing.T) {
-	var items, tags int32
+func TestAppSummariesChunksAt200(t *testing.T) {
+	var items, maxChunk int32
 	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case getItemsPath:
 			atomic.AddInt32(&items, 1)
 			payload := inputJSON(t, r)
 			list, _ := payload["ids"].([]any)
+			if n := int32(len(list)); n > atomic.LoadInt32(&maxChunk) {
+				atomic.StoreInt32(&maxChunk, n)
+			}
 			parts := make([]string, 0, len(list))
 			for _, e := range list {
 				entry, _ := e.(map[string]any)
@@ -1116,37 +1119,28 @@ func TestAppNamesChunksAndSkipsTags(t *testing.T) {
 			}
 			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
 		case getTagListPath:
-			atomic.AddInt32(&tags, 1)
 			fmt.Fprint(w, tagListFixture)
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
 	})
 
-	names, err := c.AppNames(context.Background(), []int64{379720, 479030, 123})
-	if err != nil {
-		t.Fatalf("AppNames: %v", err)
-	}
-	if len(names) != 3 || names[379720] != "Name 379720" || names[479030] != "Name 479030" || names[123] != "Name 123" {
-		t.Errorf("names = %v, want all three mapped", names)
-	}
-	if got := atomic.LoadInt32(&items); got != 1 {
-		t.Errorf("GetItems requests = %d, want exactly 1 for three ids", got)
-	}
-	if got := atomic.LoadInt32(&tags); got != 0 {
-		t.Errorf("GetTagList requests = %d, want 0 (AppNames must not fetch tag names)", got)
-	}
-
 	ids := make([]int64, 0, 450)
 	for i := int64(1); i <= 450; i++ {
 		ids = append(ids, i)
 	}
-	atomic.StoreInt32(&items, 0)
-	if _, err := c.AppNames(context.Background(), ids); err != nil {
-		t.Fatalf("AppNames chunks: %v", err)
+	summaries, err := c.AppSummaries(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("AppSummaries chunks: %v", err)
+	}
+	if len(summaries) != 450 || summaries[123].Name != "Name 123" || summaries[450].Name != "Name 450" {
+		t.Errorf("summaries = %d entries, want all 450 names mapped", len(summaries))
 	}
 	if got := atomic.LoadInt32(&items); got != 3 {
-		t.Errorf("GetItems requests = %d, want 3 for 450 ids", got)
+		t.Errorf("GetItems requests = %d, want exactly 3 for 450 ids", got)
+	}
+	if got := atomic.LoadInt32(&maxChunk); got > MaxItemsPerRequest {
+		t.Errorf("largest GetItems chunk = %d ids, want <= %d", got, MaxItemsPerRequest)
 	}
 }
 
@@ -1265,27 +1259,29 @@ func TestDemoLinksOmitsHiddenApp(t *testing.T) {
 	}
 }
 
-// TestAppNamesOmitsHiddenApp: same rule for names — hidden ids are absent.
-func TestAppNamesOmitsHiddenApp(t *testing.T) {
+// TestAppSummariesOmitsHiddenApp: same rule for summaries — hidden ids are absent.
+func TestAppSummariesOmitsHiddenApp(t *testing.T) {
 	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != getItemsPath {
-			t.Errorf("unexpected path %s", r.URL.Path)
-			http.NotFound(w, r)
-			return
-		}
-		fmt.Fprint(w, `{"response":{"store_items":[
+		switch r.URL.Path {
+		case getItemsPath:
+			fmt.Fprint(w, `{"response":{"store_items":[
 			{"item_type":0,"id":1245690,"success":15,"visible":false,"name":"","appid":0},
 			{"item_type":0,"id":379720,"appid":379720,"success":1,"visible":true,"name":"DOOM"}
 		]}}`)
+		case getTagListPath:
+			fmt.Fprint(w, tagListFixture)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
 	})
-	names, err := c.AppNames(context.Background(), []int64{1245690, 379720})
+	summaries, err := c.AppSummaries(context.Background(), []int64{1245690, 379720})
 	if err != nil {
-		t.Fatalf("AppNames: %v", err)
+		t.Fatalf("AppSummaries: %v", err)
 	}
-	if len(names) != 1 || names[379720] != "DOOM" {
-		t.Fatalf("names = %v, want only 379720 mapped to DOOM", names)
+	if len(summaries) != 1 || summaries[379720].Name != "DOOM" {
+		t.Fatalf("summaries = %v, want only 379720 mapped to DOOM", summaries)
 	}
-	if _, ok := names[1245690]; ok {
-		t.Error("a hidden app must be absent from the name map")
+	if _, ok := summaries[1245690]; ok {
+		t.Error("a hidden app must be absent from the summary map")
 	}
 }

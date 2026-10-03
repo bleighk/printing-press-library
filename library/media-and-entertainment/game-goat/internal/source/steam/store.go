@@ -647,7 +647,7 @@ func (c *Client) Items(ctx context.Context, appIDs []int64) ([]StoreItem, error)
 // getItemsChunk issues one GetItems request for appIDs and returns the wire
 // records the service actually returned (success == 1 and visible) plus the
 // appids the service answered as hidden (success != 1 or visible false). Items,
-// AppNames, AppSummaries, and DemoLinks all go through it; they differ only in
+// AppSummaries, and DemoLinks all go through it; they differ only in
 // the data_request they need and in how they treat the hidden ids.
 func (c *Client) getItemsChunk(ctx context.Context, appIDs []int64, dataRequest map[string]any) ([]storeItemWire, []int64, error) {
 	ids := make([]map[string]any, 0, len(appIDs))
@@ -698,38 +698,6 @@ func (c *Client) Item(ctx context.Context, appID int64) (*StoreItem, error) {
 	return &items[0], nil
 }
 
-// AppNames maps appids to their store names with a minimal GetItems request
-// (basic info only, no tag names). Ids that yield no record are absent.
-func (c *Client) AppNames(ctx context.Context, ids []int64) (map[int64]string, error) {
-	unique := dedupePositiveIDs(ids)
-	names := make(map[int64]string, len(unique))
-	chunks := chunkIDs(unique, MaxItemsPerRequest)
-	requested := false
-	var lastErr error
-	for _, chunk := range chunks {
-		wires, _, err := c.getItemsChunk(ctx, chunk, map[string]any{"include_basic_info": true})
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		requested = true
-		for _, w := range wires {
-			appID := w.AppID
-			if appID == 0 {
-				appID = w.ID
-			}
-			if appID == 0 {
-				continue
-			}
-			names[appID] = w.Name
-		}
-	}
-	if len(chunks) > 0 && !requested {
-		return nil, lastErr
-	}
-	return names, nil
-}
-
 // AppSummary is the demos parent-lookup record: the full game's display name
 // plus its store tags. Demos rarely carry tags of their own, so the parent's
 // tags are what makes a demos row useful; name and tags arrive in the same
@@ -742,7 +710,7 @@ type AppSummary struct {
 // AppSummaries maps appids to their store name AND tags in ONE GetItems
 // request per MaxItemsPerRequest chunk, asking for include_tag_count (Steam
 // caps an item's tags at 20). Ids that yield no record are absent, matching
-// AppNames. Tag.Name is filled from the cached tag dictionary — the same one
+// Items. Tag.Name is filled from the cached tag dictionary — the same one
 // a demos page already fetched for its own rows — so the parent lookup adds no
 // request.
 func (c *Client) AppSummaries(ctx context.Context, ids []int64) (map[int64]AppSummary, error) {
