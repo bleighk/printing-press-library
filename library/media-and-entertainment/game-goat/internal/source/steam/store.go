@@ -69,10 +69,35 @@ const (
 var ErrAmbiguousApp = errors.New("steam: title matched multiple store apps")
 
 // ErrAppHidden: the app exists but is hidden from anonymous store requests
-// (age or region gate). It wraps ErrAppNotFound so existing not-found handling
-// and the CLI's not-found exit code still apply; callers that can distinguish
-// the cases report the store record and demo state as unknown instead of empty.
-var ErrAppHidden = fmt.Errorf("%w: hidden from anonymous store requests (age or region gate)", ErrAppNotFound)
+// (age or region gate). It is deliberately its own message rather than an
+// ErrAppNotFound wrap: wrapping made the CLI report a hidden app as "no Steam
+// app matched the title", which is false. Is() keeps it a not-found for
+// existing handling and the CLI's not-found exit code; callers that can
+// distinguish the cases report the store record and demo state as unknown
+// instead of empty.
+var ErrAppHidden error = hiddenAppError{}
+
+// hiddenAppError is the comparable sentinel type behind ErrAppHidden.
+type hiddenAppError struct{}
+
+func (hiddenAppError) Error() string {
+	return "steam: app is hidden from anonymous store requests (age or region gate)"
+}
+
+func (hiddenAppError) Is(target error) bool {
+	return target == ErrAppNotFound
+}
+
+// hiddenAppNotFoundError carries the app id(s) into the hidden-app message
+// while keeping ErrAppHidden in the Unwrap chain, so errors.Is works for both
+// the hidden sentinel and ErrAppNotFound.
+type hiddenAppNotFoundError struct{ ids string }
+
+func (e hiddenAppNotFoundError) Error() string {
+	return fmt.Sprintf("steam: app %s is hidden from anonymous store requests (age or region gate); its store record and demo state are unknown", e.ids)
+}
+
+func (e hiddenAppNotFoundError) Unwrap() error { return ErrAppHidden }
 
 // AppType is the typed app taxonomy the store services expose. Steam models
 // "free to play" and "early access" as ATTRIBUTES (is_free, the Early Access
@@ -604,7 +629,7 @@ func (c *Client) Items(ctx context.Context, appIDs []int64) ([]StoreItem, error)
 	}
 	if len(items) == 0 {
 		if len(hidden) > 0 {
-			return nil, fmt.Errorf("%w: app %s; the store record and demo state are unknown", ErrAppHidden, joinIDs(hidden))
+			return nil, hiddenAppNotFoundError{ids: joinIDs(hidden)}
 		}
 		if lastErr != nil {
 			return nil, lastErr
