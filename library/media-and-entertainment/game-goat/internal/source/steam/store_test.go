@@ -868,3 +868,294 @@ func TestConversionHelpers(t *testing.T) {
 		t.Error("withinAYear must reject a two-year gap")
 	}
 }
+
+func TestItemsChunksAt200(t *testing.T) {
+	ids := make([]int64, 0, 450)
+	for i := int64(1); i <= 450; i++ {
+		ids = append(ids, i)
+	}
+	var requests, maxBatch int32
+	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case getItemsPath:
+			atomic.AddInt32(&requests, 1)
+			payload := inputJSON(t, r)
+			list, _ := payload["ids"].([]any)
+			if int32(len(list)) > atomic.LoadInt32(&maxBatch) {
+				atomic.StoreInt32(&maxBatch, int32(len(list)))
+			}
+			parts := make([]string, 0, len(list))
+			for _, e := range list {
+				entry, _ := e.(map[string]any)
+				parts = append(parts, fmt.Sprintf(`{"appid":%v,"success":1,"name":"App %v"}`, entry["appid"], entry["appid"]))
+			}
+			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
+		case getTagListPath:
+			fmt.Fprint(w, tagListFixture)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+
+	items, err := c.Items(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("Items: %v", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != 3 {
+		t.Fatalf("GetItems requests = %d, want 3 (450 ids / %d)", got, MaxItemsPerRequest)
+	}
+	if got := atomic.LoadInt32(&maxBatch); got > MaxItemsPerRequest {
+		t.Fatalf("largest batch = %d ids, want <= %d", got, MaxItemsPerRequest)
+	}
+	if len(items) != 450 {
+		t.Fatalf("items = %d, want all 450 returned across the chunks", len(items))
+	}
+}
+
+func TestBrowseSkipTagNamesMakesNoTagListRequest(t *testing.T) {
+	var queryRequests, tagRequests int32
+	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case queryPath:
+			atomic.AddInt32(&queryRequests, 1)
+			fmt.Fprintf(w, `{"response":{"metadata":{"total_matching_records":1},"store_items":[%s]}}`, storeItemFixture)
+		case getTagListPath:
+			atomic.AddInt32(&tagRequests, 1)
+			fmt.Fprint(w, tagListFixture)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	})
+
+	if _, err := c.Browse(context.Background(), BrowseOptions{Types: []AppType{AppTypeGame}, SkipTagNames: true}); err != nil {
+		t.Fatalf("Browse with SkipTagNames: %v", err)
+	}
+	if got := atomic.LoadInt32(&tagRequests); got != 0 {
+		t.Errorf("GetTagList requests with SkipTagNames = %d, want 0", got)
+	}
+	if got := atomic.LoadInt32(&queryRequests); got != 1 {
+		t.Errorf("Query requests with SkipTagNames = %d, want 1", got)
+	}
+
+	// Same client (its tag dictionary is still cold): the default path must
+	// fetch the names once.
+	atomic.StoreInt32(&tagRequests, 0)
+	atomic.StoreInt32(&queryRequests, 0)
+	if _, err := c.Browse(context.Background(), BrowseOptions{Types: []AppType{AppTypeGame}}); err != nil {
+		t.Fatalf("Browse without SkipTagNames: %v", err)
+	}
+	if got := atomic.LoadInt32(&tagRequests); got != 1 {
+		t.Errorf("GetTagList requests without SkipTagNames = %d, want 1", got)
+	}
+}
+
+func TestSearchPageEncodesTermTagsAndLimit(t *testing.T) {
+	assertPayload := func(t *testing.T, opts SearchPageOptions, check func(map[string]any)) {
+		t.Helper()
+		var seen map[string]any
+		c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != searchSuggestionsPath {
+				t.Errorf("unexpected path %s", r.URL.Path)
+				http.NotFound(w, r)
+				return
+			}
+			seen = inputJSON(t, r)
+			fmt.Fprint(w, `{"response":{"metadata":{"total_matching_records":0},"store_items":[]}}`)
+		})
+		if _, err := c.SearchPage(context.Background(), "portal", opts); err != nil {
+			t.Fatalf("SearchPage: %v", err)
+		}
+		if seen["search_term"] != "portal" {
+			t.Errorf("search_term = %v, want portal", seen["search_term"])
+		}
+		check(seen)
+	}
+
+	t.Run("limit above MaxSearchBatch clamps", func(t *testing.T) {
+		assertPayload(t, SearchPageOptions{Limit: 5000}, func(seen map[string]any) {
+			if got := seen["max_results"]; got != float64(MaxSearchBatch) {
+				t.Errorf("max_results = %v, want %d (clamped)", got, MaxSearchBatch)
+			}
+		})
+	})
+	t.Run("limit zero defaults to 100", func(t *testing.T) {
+		assertPayload(t, SearchPageOptions{Limit: 0}, func(seen map[string]any) {
+			if got := seen["max_results"]; got != float64(100) {
+				t.Errorf("max_results = %v, want 100 (default)", got)
+			}
+		})
+	})
+	t.Run("types filter", func(t *testing.T) {
+		assertPayload(t, SearchPageOptions{Types: []AppType{AppTypeDemo}}, func(seen map[string]any) {
+			tf := object(t, seen, "filters", "type_filters")
+			if len(tf) != 1 || tf["include_demos"] != true {
+				t.Errorf("type_filters = %v, want exactly {include_demos:true}", tf)
+			}
+		})
+	})
+	t.Run("default types is game", func(t *testing.T) {
+		assertPayload(t, SearchPageOptions{}, func(seen map[string]any) {
+			tf := object(t, seen, "filters", "type_filters")
+			if tf["include_games"] != true {
+				t.Errorf("type_filters = %v, want include_games by default", tf)
+			}
+		})
+	})
+	t.Run("tags become one group each", func(t *testing.T) {
+		assertPayload(t, SearchPageOptions{TagIDs: []int{1716, 1628}}, func(seen map[string]any) {
+			tags := object(t, seen, "filters")["tagids_must_match"]
+			list, ok := tags.([]any)
+			if !ok || len(list) != 2 {
+				t.Fatalf("tagids_must_match = %v, want two groups", tags)
+			}
+			for i, want := range []float64{1716, 1628} {
+				entry, _ := list[i].(map[string]any)
+				got, _ := entry["tagids"].([]any)
+				if len(got) != 1 || got[0] != want {
+					t.Errorf("group %d tagids = %v, want [%v]", i, entry["tagids"], want)
+				}
+			}
+		})
+	})
+}
+
+func TestSearchPageReportsTotalAndEmptyIsNotError(t *testing.T) {
+	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"response":{"metadata":{"total_matching_records":1500},"store_items":[%s,%s,%s]}}`, storeItemFixture, storeDemoFixture, storeDemoFixture)
+	})
+	page, err := c.SearchPage(context.Background(), "portal", SearchPageOptions{Limit: 3})
+	if err != nil {
+		t.Fatalf("SearchPage: %v", err)
+	}
+	if page.Total != 1500 {
+		t.Errorf("Total = %d, want 1500 (metadata.total_matching_records)", page.Total)
+	}
+	if len(page.Items) != 3 {
+		t.Errorf("Items = %d, want 3", len(page.Items))
+	}
+	if !page.Truncated() {
+		t.Error("Truncated() must be true when total (1500) exceeds returned items (3)")
+	}
+
+	empty := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"response":{"metadata":{"total_matching_records":0},"store_items":[]}}`)
+	})
+	emptyPage, err := empty.SearchPage(context.Background(), "nothing", SearchPageOptions{})
+	if err != nil {
+		t.Fatalf("an empty SearchPage is a legitimate answer, got error: %v", err)
+	}
+	if emptyPage.Total != 0 || len(emptyPage.Items) != 0 || emptyPage.Truncated() {
+		t.Errorf("empty page = %+v, want total 0, no items, not truncated", emptyPage)
+	}
+}
+
+func TestAppNamesChunksAndSkipsTags(t *testing.T) {
+	var items, tags int32
+	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case getItemsPath:
+			atomic.AddInt32(&items, 1)
+			payload := inputJSON(t, r)
+			list, _ := payload["ids"].([]any)
+			parts := make([]string, 0, len(list))
+			for _, e := range list {
+				entry, _ := e.(map[string]any)
+				parts = append(parts, fmt.Sprintf(`{"appid":%v,"success":1,"name":"Name %v"}`, entry["appid"], entry["appid"]))
+			}
+			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
+		case getTagListPath:
+			atomic.AddInt32(&tags, 1)
+			fmt.Fprint(w, tagListFixture)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	})
+
+	names, err := c.AppNames(context.Background(), []int64{379720, 479030, 123})
+	if err != nil {
+		t.Fatalf("AppNames: %v", err)
+	}
+	if len(names) != 3 || names[379720] != "Name 379720" || names[479030] != "Name 479030" || names[123] != "Name 123" {
+		t.Errorf("names = %v, want all three mapped", names)
+	}
+	if got := atomic.LoadInt32(&items); got != 1 {
+		t.Errorf("GetItems requests = %d, want exactly 1 for three ids", got)
+	}
+	if got := atomic.LoadInt32(&tags); got != 0 {
+		t.Errorf("GetTagList requests = %d, want 0 (AppNames must not fetch tag names)", got)
+	}
+
+	ids := make([]int64, 0, 450)
+	for i := int64(1); i <= 450; i++ {
+		ids = append(ids, i)
+	}
+	atomic.StoreInt32(&items, 0)
+	if _, err := c.AppNames(context.Background(), ids); err != nil {
+		t.Fatalf("AppNames chunks: %v", err)
+	}
+	if got := atomic.LoadInt32(&items); got != 3 {
+		t.Errorf("GetItems requests = %d, want 3 for 450 ids", got)
+	}
+}
+
+func TestDemoLinksMapsDemosAndChunks(t *testing.T) {
+	var seen map[string]any
+	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != getItemsPath {
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		seen = inputJSON(t, r)
+		fmt.Fprint(w, `{"response":{"store_items":[
+			{"appid":1,"success":1,"name":"With Demo","related_items":{"demos":[{"appid":5,"description":""}]}},
+			{"appid":2,"success":1,"name":"No Demo"}
+		]}}`)
+	})
+
+	links, err := c.DemoLinks(context.Background(), []int64{1, 2, 999})
+	if err != nil {
+		t.Fatalf("DemoLinks: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("links = %v, want exactly the two found ids", links)
+	}
+	if demos := links[1]; len(demos) != 1 || demos[0] != 5 {
+		t.Errorf("links[1] = %v, want [5]", demos)
+	}
+	noDemo, ok := links[2]
+	if !ok {
+		t.Fatal("app 2 must be present with an empty demo list")
+	}
+	if noDemo == nil || len(noDemo) != 0 {
+		t.Errorf("links[2] = %v, want a non-nil empty slice", noDemo)
+	}
+	if _, ok := links[999]; ok {
+		t.Error("an id with no returned record must be absent from the map")
+	}
+	dataReq := object(t, seen, "data_request")
+	if dataReq["include_related_items"] != true || dataReq["include_basic_info"] != true {
+		t.Errorf("data_request = %v, want basic_info and related_items", dataReq)
+	}
+
+	// Chunking: 450 ids means three GetItems requests.
+	var items int32
+	chunkClient := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != getItemsPath {
+			return
+		}
+		atomic.AddInt32(&items, 1)
+		fmt.Fprint(w, `{"response":{"store_items":[]}}`)
+	})
+	ids := make([]int64, 0, 450)
+	for i := int64(1); i <= 450; i++ {
+		ids = append(ids, i)
+	}
+	if _, err := chunkClient.DemoLinks(context.Background(), ids); err != nil {
+		t.Fatalf("DemoLinks chunks: %v", err)
+	}
+	if got := atomic.LoadInt32(&items); got != 3 {
+		t.Errorf("GetItems requests = %d, want 3 for 450 ids", got)
+	}
+}

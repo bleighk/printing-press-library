@@ -46,6 +46,13 @@ const (
 	// MaxPageSize caps one service page (Valve accepts up to 100).
 	MaxPageSize = 100
 
+	// MaxSearchBatch caps SearchSuggestions max_results.
+	MaxSearchBatch = 1000
+
+	// MaxItemsPerRequest caps GetItems appids per request. The edge rejects
+	// query strings above ~8192 bytes (about 265 ids), so batch well below it.
+	MaxItemsPerRequest = 200
+
 	// earlyAccessTagID is the store's "Early Access" tag. Steam models early
 	// access as a tag, not as an app type.
 	earlyAccessTagID = 493
@@ -250,6 +257,17 @@ type BrowseOptions struct {
 	ReleasedOnly bool
 	Start        int
 	Count        int
+	// SkipTagNames skips the GetTagList request that fills Tag.Name. Callers
+	// that only need tag ids (or no tags) save that request.
+	SkipTagNames bool
+}
+
+// SearchPageOptions configures SearchPage: the same filters as Browse but over
+// the text-search endpoint, which reports a total but ignores offsets.
+type SearchPageOptions struct {
+	Types  []AppType
+	TagIDs []int // every listed tag is required (AND across tags)
+	Limit  int   // capped at MaxSearchBatch; defaults to 100
 }
 
 // Page is one page of a paginated browse. Count is the number of items
@@ -263,6 +281,11 @@ type Page struct {
 
 // HasMore reports whether a further page exists after this one.
 func (p Page) HasMore() bool { return p.Start+p.Count < p.Total }
+
+// Truncated reports whether the service matched more records than this page
+// returned. It is the text-search view of HasMore: the endpoint has no offset,
+// so the only honest signal is total > returned.
+func (p *Page) Truncated() bool { return p.Total > len(p.Items) }
 
 // ---------------------------------------------------------------------------
 // Wire shapes (the services serialise protobuf fields as lowercase snake_case)
@@ -417,6 +440,60 @@ func (c *Client) search(ctx context.Context, term string, types []AppType, limit
 	return items, nil
 }
 
+// SearchPage returns ranked store items for a text term together with the
+// service's total match count. Unlike Search, an empty result is a legitimate
+// answer (an empty Page, not an error), and unlike Browse the endpoint ignores
+// offsets: Total may exceed the returned items, which Truncated reports.
+func (c *Client) SearchPage(ctx context.Context, term string, opts SearchPageOptions) (*Page, error) {
+	term = strings.TrimSpace(term)
+	if term == "" {
+		return nil, fmt.Errorf("steam: empty search term")
+	}
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > MaxSearchBatch {
+		limit = MaxSearchBatch
+	}
+	types := opts.Types
+	if len(types) == 0 {
+		types = []AppType{AppTypeGame}
+	}
+	tf, err := typeFilters(types)
+	if err != nil {
+		return nil, err
+	}
+	filters := map[string]any{"type_filters": tf}
+	if len(opts.TagIDs) > 0 {
+		// One group per tag: the service ORs within a group and ANDs across
+		// them, so every listed tag is required. Same shape as Browse.
+		groups := make([]map[string]any, 0, len(opts.TagIDs))
+		for _, id := range opts.TagIDs {
+			groups = append(groups, map[string]any{"tagids": []int{id}})
+		}
+		filters["tagids_must_match"] = groups
+	}
+	payload := map[string]any{
+		"search_term":  term,
+		"max_results":  limit,
+		"context":      storeContext(c),
+		"data_request": storeDataRequest(),
+		"filters":      filters,
+	}
+	var wire storeResponseWire
+	if err := c.serviceGet(ctx, searchSuggestionsPath, payload, &wire); err != nil {
+		return nil, err
+	}
+	items := convertItems(wire.Response.StoreItems)
+	return &Page{
+		Total: wire.Response.Metadata.TotalMatchingRecords,
+		Start: wire.Response.Metadata.Start,
+		Count: len(items),
+		Items: items,
+	}, nil
+}
+
 // Browse walks the store catalog with filters and real pagination. An empty
 // page is a legitimate answer (unlike Search), so only transport and decode
 // failures return an error.
@@ -472,7 +549,9 @@ func (c *Client) Browse(ctx context.Context, opts BrowseOptions) (*Page, error) 
 		return nil, err
 	}
 	items := convertItems(wire.Response.StoreItems)
-	c.attachTagNames(ctx, items)
+	if !opts.SkipTagNames {
+		c.attachTagNames(ctx, items)
+	}
 	return &Page{
 		Total: wire.Response.Metadata.TotalMatchingRecords,
 		Start: wire.Response.Metadata.Start,
@@ -489,6 +568,36 @@ func (c *Client) Items(ctx context.Context, appIDs []int64) ([]StoreItem, error)
 	if len(appIDs) == 0 {
 		return nil, nil
 	}
+	var items []StoreItem
+	var lastErr error
+	for _, chunk := range chunkIDs(appIDs, MaxItemsPerRequest) {
+		wires, err := c.getItemsChunk(ctx, chunk, storeDataRequest())
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(wires) == 0 {
+			lastErr = fmt.Errorf("%w: app %s (store service returned no record)", ErrAppNotFound, joinIDs(chunk))
+			continue
+		}
+		for _, w := range wires {
+			items = append(items, w.toStoreItem())
+		}
+	}
+	if len(items) == 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("%w: app %s (store service returned no record)", ErrAppNotFound, joinIDs(appIDs))
+	}
+	c.attachTagNames(ctx, items)
+	return items, nil
+}
+
+// getItemsChunk issues one GetItems request for appIDs and returns the wire
+// records the service marked successful. Items, AppNames, and DemoLinks all go
+// through it; they differ only in the data_request they need.
+func (c *Client) getItemsChunk(ctx context.Context, appIDs []int64, dataRequest map[string]any) ([]storeItemWire, error) {
 	ids := make([]map[string]any, 0, len(appIDs))
 	for _, id := range appIDs {
 		ids = append(ids, map[string]any{"appid": id})
@@ -496,24 +605,20 @@ func (c *Client) Items(ctx context.Context, appIDs []int64) ([]StoreItem, error)
 	payload := map[string]any{
 		"ids":          ids,
 		"context":      storeContext(c),
-		"data_request": storeDataRequest(),
+		"data_request": dataRequest,
 	}
 	var wire storeResponseWire
 	if err := c.serviceGet(ctx, getItemsPath, payload, &wire); err != nil {
 		return nil, err
 	}
-	items := make([]StoreItem, 0, len(wire.Response.StoreItems))
+	out := make([]storeItemWire, 0, len(wire.Response.StoreItems))
 	for _, w := range wire.Response.StoreItems {
 		if w.Success == 0 {
 			continue
 		}
-		items = append(items, w.toStoreItem())
+		out = append(out, w)
 	}
-	if len(items) == 0 {
-		return nil, fmt.Errorf("%w: app %s (store service returned no record)", ErrAppNotFound, joinIDs(appIDs))
-	}
-	c.attachTagNames(ctx, items)
-	return items, nil
+	return out, nil
 }
 
 // Item returns the full typed record for exactly one appid.
@@ -528,6 +633,78 @@ func (c *Client) Item(ctx context.Context, appID int64) (*StoreItem, error) {
 		}
 	}
 	return &items[0], nil
+}
+
+// AppNames maps appids to their store names with a minimal GetItems request
+// (basic info only, no tag names). Ids that yield no record are absent.
+func (c *Client) AppNames(ctx context.Context, ids []int64) (map[int64]string, error) {
+	unique := dedupePositiveIDs(ids)
+	names := make(map[int64]string, len(unique))
+	chunks := chunkIDs(unique, MaxItemsPerRequest)
+	requested := false
+	var lastErr error
+	for _, chunk := range chunks {
+		wires, err := c.getItemsChunk(ctx, chunk, map[string]any{"include_basic_info": true})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		requested = true
+		for _, w := range wires {
+			appID := w.AppID
+			if appID == 0 {
+				appID = w.ID
+			}
+			if appID == 0 {
+				continue
+			}
+			names[appID] = w.Name
+		}
+	}
+	if len(chunks) > 0 && !requested {
+		return nil, lastErr
+	}
+	return names, nil
+}
+
+// DemoLinks maps each appid to the demo appids GetItems reports for it. A found
+// app without demos maps to a non-nil empty slice; ids with no record are
+// absent.
+func (c *Client) DemoLinks(ctx context.Context, ids []int64) (map[int64][]int64, error) {
+	unique := dedupePositiveIDs(ids)
+	links := make(map[int64][]int64, len(unique))
+	chunks := chunkIDs(unique, MaxItemsPerRequest)
+	requested := false
+	var lastErr error
+	for _, chunk := range chunks {
+		wires, err := c.getItemsChunk(ctx, chunk, map[string]any{
+			"include_basic_info":    true,
+			"include_related_items": true,
+		})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		requested = true
+		for _, w := range wires {
+			appID := w.AppID
+			if appID == 0 {
+				appID = w.ID
+			}
+			if appID == 0 {
+				continue
+			}
+			demos := demoAppIDs(w.RelatedItems)
+			if demos == nil {
+				demos = []int64{}
+			}
+			links[appID] = demos
+		}
+	}
+	if len(chunks) > 0 && !requested {
+		return nil, lastErr
+	}
+	return links, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -936,6 +1113,36 @@ func joinIDs(ids []int64) string {
 		parts = append(parts, strconv.FormatInt(id, 10))
 	}
 	return strings.Join(parts, ",")
+}
+
+// chunkIDs splits ids into consecutive slices of at most size entries.
+func chunkIDs(ids []int64, size int) [][]int64 {
+	if size <= 0 {
+		size = MaxItemsPerRequest
+	}
+	var chunks [][]int64
+	for start := 0; start < len(ids); start += size {
+		end := start + size
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunks = append(chunks, ids[start:end])
+	}
+	return chunks
+}
+
+// dedupePositiveIDs drops non-positive appids and duplicates, preserving order.
+func dedupePositiveIDs(ids []int64) []int64 {
+	seen := make(map[int64]bool, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
