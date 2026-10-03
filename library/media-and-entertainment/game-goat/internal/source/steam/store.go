@@ -265,9 +265,11 @@ type BrowseOptions struct {
 // SearchPageOptions configures SearchPage: the same filters as Browse but over
 // the text-search endpoint, which reports a total but ignores offsets.
 type SearchPageOptions struct {
-	Types  []AppType
-	TagIDs []int // every listed tag is required (AND across tags)
-	Limit  int   // capped at MaxSearchBatch; defaults to 100
+	Types        []AppType
+	TagIDs       []int // every listed tag is required (AND across tags)
+	ComingSoon   bool  // unreleased items only (server-side coming_soon_only)
+	ReleasedOnly bool  // released items only (server-side released_only)
+	Limit        int   // capped at MaxSearchBatch; defaults to 100
 }
 
 // Page is one page of a paginated browse. Count is the number of items
@@ -465,6 +467,12 @@ func (c *Client) SearchPage(ctx context.Context, term string, opts SearchPageOpt
 		return nil, err
 	}
 	filters := map[string]any{"type_filters": tf}
+	if opts.ComingSoon {
+		filters["coming_soon_only"] = true
+	}
+	if opts.ReleasedOnly {
+		filters["released_only"] = true
+	}
 	if len(opts.TagIDs) > 0 {
 		// One group per tag: the service ORs within a group and ANDs across
 		// them, so every listed tag is required. Same shape as Browse.

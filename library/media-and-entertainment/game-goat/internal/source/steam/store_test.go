@@ -1020,6 +1020,57 @@ func TestSearchPageEncodesTermTagsAndLimit(t *testing.T) {
 	})
 }
 
+func TestSearchPageEncodesReleaseFilters(t *testing.T) {
+	assertPayload := func(t *testing.T, opts SearchPageOptions, check func(filters map[string]any)) {
+		t.Helper()
+		var seen map[string]any
+		c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != searchSuggestionsPath {
+				t.Errorf("unexpected path %s", r.URL.Path)
+				http.NotFound(w, r)
+				return
+			}
+			seen = inputJSON(t, r)
+			fmt.Fprint(w, `{"response":{"metadata":{"total_matching_records":0},"store_items":[]}}`)
+		})
+		if _, err := c.SearchPage(context.Background(), "portal", opts); err != nil {
+			t.Fatalf("SearchPage: %v", err)
+		}
+		check(object(t, seen, "filters"))
+	}
+
+	t.Run("released only", func(t *testing.T) {
+		assertPayload(t, SearchPageOptions{ReleasedOnly: true}, func(filters map[string]any) {
+			if filters["released_only"] != true {
+				t.Errorf("released_only = %v, want true", filters["released_only"])
+			}
+			if _, ok := filters["coming_soon_only"]; ok {
+				t.Errorf("coming_soon_only must be absent with ReleasedOnly, got %v", filters["coming_soon_only"])
+			}
+		})
+	})
+	t.Run("coming soon only", func(t *testing.T) {
+		assertPayload(t, SearchPageOptions{ComingSoon: true}, func(filters map[string]any) {
+			if filters["coming_soon_only"] != true {
+				t.Errorf("coming_soon_only = %v, want true", filters["coming_soon_only"])
+			}
+			if _, ok := filters["released_only"]; ok {
+				t.Errorf("released_only must be absent with ComingSoon, got %v", filters["released_only"])
+			}
+		})
+	})
+	t.Run("neither", func(t *testing.T) {
+		assertPayload(t, SearchPageOptions{}, func(filters map[string]any) {
+			if _, ok := filters["released_only"]; ok {
+				t.Errorf("released_only must be absent by default, got %v", filters["released_only"])
+			}
+			if _, ok := filters["coming_soon_only"]; ok {
+				t.Errorf("coming_soon_only must be absent by default, got %v", filters["coming_soon_only"])
+			}
+		})
+	})
+}
+
 func TestSearchPageReportsTotalAndEmptyIsNotError(t *testing.T) {
 	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"response":{"metadata":{"total_matching_records":1500},"store_items":[%s,%s,%s]}}`, storeItemFixture, storeDemoFixture, storeDemoFixture)

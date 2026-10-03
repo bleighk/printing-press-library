@@ -220,26 +220,83 @@ func TestDemosQueryEncodesDemoOnlyType(t *testing.T) {
 	}
 }
 
-func TestDemosComingSoonSwapsReleaseFilter(t *testing.T) {
+func TestDemosTitleDefaultsToReleasedOnly(t *testing.T) {
 	demosIsolateEnv(t)
 	log := newDemosReqLog()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.record(r)
-		fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(601, "Demo Two", 0)}))
+		if r.URL.Path != demosSearchPath {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(600, "Demo One", 0)}))
 	}))
 	defer srv.Close()
 	withSteamHook(t, srv)
 
-	if _, _, err := runDemosCmd(t, "--coming-soon"); err != nil {
-		t.Fatalf("steam demos --coming-soon: %v", err)
+	if _, _, err := runDemosCmd(t, "--title", "portal", "--limit", "1000"); err != nil {
+		t.Fatalf("steam demos --title: %v", err)
 	}
-	filters := nestedMap(t, log.last(t, demosQueryPath), "query", "filters")
-	if filters["coming_soon_only"] != true {
-		t.Errorf("coming_soon_only = %v, want true", filters["coming_soon_only"])
+	filters := nestedMap(t, log.last(t, demosSearchPath), "filters")
+	if filters["released_only"] != true {
+		t.Errorf("released_only = %v, want true (title path defaults to released)", filters["released_only"])
 	}
-	if _, ok := filters["released_only"]; ok {
-		t.Errorf("released_only must be absent under --coming-soon, got %v", filters["released_only"])
+	if _, ok := filters["coming_soon_only"]; ok {
+		t.Errorf("coming_soon_only must be absent by default, got %v", filters["coming_soon_only"])
 	}
+}
+
+func TestDemosComingSoonSwapsReleaseFilter(t *testing.T) {
+	t.Run("browse path", func(t *testing.T) {
+		demosIsolateEnv(t)
+		log := newDemosReqLog()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.record(r)
+			fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(601, "Demo Two", 0)}))
+		}))
+		defer srv.Close()
+		withSteamHook(t, srv)
+
+		if _, _, err := runDemosCmd(t, "--coming-soon"); err != nil {
+			t.Fatalf("steam demos --coming-soon: %v", err)
+		}
+		filters := nestedMap(t, log.last(t, demosQueryPath), "query", "filters")
+		if filters["coming_soon_only"] != true {
+			t.Errorf("coming_soon_only = %v, want true", filters["coming_soon_only"])
+		}
+		if _, ok := filters["released_only"]; ok {
+			t.Errorf("released_only must be absent under --coming-soon, got %v", filters["released_only"])
+		}
+	})
+
+	t.Run("title path", func(t *testing.T) {
+		demosIsolateEnv(t)
+		log := newDemosReqLog()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.record(r)
+			if r.URL.Path != demosSearchPath {
+				t.Errorf("unexpected path %s", r.URL.Path)
+			}
+			fmt.Fprint(w, storeResponse(273, 0, 1, []string{demoItemJSON(602, "Demo Three", 0)}))
+		}))
+		defer srv.Close()
+		withSteamHook(t, srv)
+
+		env, _, err := runDemosCmd(t, "--title", "portal", "--coming-soon", "--limit", "1000")
+		if err != nil {
+			t.Fatalf("steam demos --title --coming-soon: %v", err)
+		}
+		filters := nestedMap(t, log.last(t, demosSearchPath), "filters")
+		if filters["coming_soon_only"] != true {
+			t.Errorf("coming_soon_only = %v, want true", filters["coming_soon_only"])
+		}
+		if _, ok := filters["released_only"]; ok {
+			t.Errorf("released_only must be absent under --coming-soon, got %v", filters["released_only"])
+		}
+		meta, _ := env["meta"].(map[string]any)
+		if meta["total"] != float64(273) {
+			t.Errorf("meta.total = %v, want 273 (the service total, not a filtered count)", meta["total"])
+		}
+	})
 }
 
 func TestDemosParentEnrichmentIsTwoRequestsPerPage(t *testing.T) {

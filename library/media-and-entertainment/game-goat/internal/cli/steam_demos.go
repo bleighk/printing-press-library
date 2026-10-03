@@ -48,9 +48,10 @@ Request budget per invocation:
   - a --title batch costs 1 SearchSuggestions request plus one name lookup per
     200 full games.
 
---coming-soon on the browse path swaps released-only for coming-soon-only. With
---title it filters the returned batch client-side, because the text-search
-endpoint has no release filter.
+Both the browse and --title paths default to released demos ("available now"),
+and --coming-soon swaps that for unreleased demos only. Either way the release
+filter is applied server-side, so meta.total is the service's matching count,
+not a filtered batch.
 
 ` + steamCatalogLong
 
@@ -126,9 +127,11 @@ func newSteamDemosCmd(flags *rootFlags) *cobra.Command {
 
 			if title != "" {
 				p, serr := c.SearchPage(ctx, title, steam.SearchPageOptions{
-					Types:  []steam.AppType{steam.AppTypeDemo},
-					TagIDs: tagIDs,
-					Limit:  limit,
+					Types:        []steam.AppType{steam.AppTypeDemo},
+					TagIDs:       tagIDs,
+					ComingSoon:   comingSoon,
+					ReleasedOnly: !comingSoon,
+					Limit:        limit,
 				})
 				if serr != nil {
 					return classifySteamError(serr)
@@ -138,10 +141,6 @@ func newSteamDemosCmd(flags *rootFlags) *cobra.Command {
 				meta.Total = p.Total
 				truncated := p.Truncated()
 				meta.Truncated = &truncated
-				if comingSoon {
-					items = filterComingSoonDemos(items)
-					meta.Total = len(items)
-				}
 			} else {
 				result, berr := c.Browse(ctx, steam.BrowseOptions{
 					Types:        []steam.AppType{steam.AppTypeDemo},
@@ -178,7 +177,7 @@ func newSteamDemosCmd(flags *rootFlags) *cobra.Command {
 
 	cmd.Flags().StringVar(&title, "title", "", "Only demos whose title matches this term (one batch, up to 1000; the text-search endpoint ignores offsets, so --page is rejected with --title)")
 	cmd.Flags().StringSliceVar(&tags, "tag", nil, "Store tag name or tagid that every result must carry (repeatable or comma-separated, e.g. --tag Roguelike,Metroidvania)")
-	cmd.Flags().BoolVar(&comingSoon, "coming-soon", false, "Only unreleased demos (browse path swaps released-only for coming-soon-only)")
+	cmd.Flags().BoolVar(&comingSoon, "coming-soon", false, "Only unreleased demos; without it both paths return available-now demos (server-side filter)")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Results per page (1-100 without --title, 1-1000 with --title)")
 	cmd.Flags().IntVar(&page, "page", 1, "Page number, 1-based (browse only; rejected with --title)")
 	cmd.Flags().StringVar(&country, "country", "", "ISO 3166-1 alpha-2 storefront region (default STEAM_COUNTRY, ITAD_COUNTRY, or US)")
@@ -219,18 +218,6 @@ func attachDemoParentNames(ctx context.Context, c *steam.Client, rows []steamDem
 		}
 	}
 	return ids, nil
-}
-
-// filterComingSoonDemos is the client-side fallback for --coming-soon on the
-// title path, which has no server release filter.
-func filterComingSoonDemos(items []steam.StoreItem) []steam.StoreItem {
-	out := make([]steam.StoreItem, 0, len(items))
-	for _, item := range items {
-		if item.ComingSoon {
-			out = append(out, item)
-		}
-	}
-	return out
 }
 
 func steamDemoHeading(title string, meta steamMeta, count, page int) string {
