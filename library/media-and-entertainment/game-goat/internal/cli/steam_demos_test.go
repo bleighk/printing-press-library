@@ -27,6 +27,10 @@ const (
 	demosGetTagListPath = "/IStoreService/GetTagList/v1/"
 )
 
+// demosTagListJSON is the shared tag dictionary fixture (tagid -> name). The
+// client caches it, so one test serves it once for every tag lookup.
+const demosTagListJSON = `{"response":{"tags":[{"tagid":1716,"name":"Roguelike"},{"tagid":1628,"name":"Metroidvania"}]}}`
+
 // demosReqLog records every request path and the decoded input_json payload so a
 // test can assert both the request count (budget) and the encoded filters.
 type demosReqLog struct {
@@ -104,6 +108,32 @@ func demoItemJSON(appid int64, name string, parent int64) string {
 		related = fmt.Sprintf(`,"related_items":{"parent_appid":%d}`, parent)
 	}
 	return fmt.Sprintf(`{"item_type":0,"id":%d,"appid":%d,"success":1,"name":%q,"type":1,"is_free":true%s}`, appid, appid, name, related)
+}
+
+// demoItemJSONWithTags is demoItemJSON plus a weighted-tags array so a test can
+// pin tag names. tagsJSON is raw, e.g. `{"tagid":1716,"weight":7}`.
+func demoItemJSONWithTags(appid int64, name string, parent int64, tagsJSON string) string {
+	related := ""
+	if parent > 0 {
+		related = fmt.Sprintf(`,"related_items":{"parent_appid":%d}`, parent)
+	}
+	tags := ""
+	if tagsJSON != "" {
+		tags = `,"tags":[` + tagsJSON + `]`
+	}
+	return fmt.Sprintf(`{"item_type":0,"id":%d,"appid":%d,"success":1,"name":%q,"type":1,"is_free":true%s%s}`, appid, appid, name, related, tags)
+}
+
+// rowTagNames reads the attached tag names off a JSON result row.
+func rowTagNames(row map[string]any) []string {
+	raw, _ := row["tags"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, tv := range raw {
+		tm, _ := tv.(map[string]any)
+		name, _ := tm["name"].(string)
+		out = append(out, name)
+	}
+	return out
 }
 
 func manyDemoItems(n int) []string {
@@ -197,10 +227,14 @@ func TestDemosQueryEncodesDemoOnlyType(t *testing.T) {
 	log := newDemosReqLog()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.record(r)
-		if r.URL.Path != demosQueryPath {
+		switch r.URL.Path {
+		case demosQueryPath:
+			fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(600, "Demo One", 0)}))
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
+		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
-		fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(600, "Demo One", 0)}))
 	}))
 	defer srv.Close()
 	withSteamHook(t, srv)
@@ -225,10 +259,14 @@ func TestDemosTitleDefaultsToReleasedOnly(t *testing.T) {
 	log := newDemosReqLog()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.record(r)
-		if r.URL.Path != demosSearchPath {
+		switch r.URL.Path {
+		case demosSearchPath:
+			fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(600, "Demo One", 0)}))
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
+		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
-		fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(600, "Demo One", 0)}))
 	}))
 	defer srv.Close()
 	withSteamHook(t, srv)
@@ -251,6 +289,10 @@ func TestDemosComingSoonSwapsReleaseFilter(t *testing.T) {
 		log := newDemosReqLog()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log.record(r)
+			if r.URL.Path == demosGetTagListPath {
+				fmt.Fprint(w, demosTagListJSON)
+				return
+			}
 			fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(601, "Demo Two", 0)}))
 		}))
 		defer srv.Close()
@@ -273,10 +315,14 @@ func TestDemosComingSoonSwapsReleaseFilter(t *testing.T) {
 		log := newDemosReqLog()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log.record(r)
-			if r.URL.Path != demosSearchPath {
+			switch r.URL.Path {
+			case demosSearchPath:
+				fmt.Fprint(w, storeResponse(273, 0, 1, []string{demoItemJSON(602, "Demo Three", 0)}))
+			case demosGetTagListPath:
+				fmt.Fprint(w, demosTagListJSON)
+			default:
 				t.Errorf("unexpected path %s", r.URL.Path)
 			}
-			fmt.Fprint(w, storeResponse(273, 0, 1, []string{demoItemJSON(602, "Demo Three", 0)}))
 		}))
 		defer srv.Close()
 		withSteamHook(t, srv)
@@ -299,21 +345,23 @@ func TestDemosComingSoonSwapsReleaseFilter(t *testing.T) {
 	})
 }
 
-func TestDemosParentEnrichmentIsTwoRequestsPerPage(t *testing.T) {
+func TestDemosPageIsThreeRequestsWithTagNames(t *testing.T) {
 	demosIsolateEnv(t)
 	log := newDemosReqLog()
 	items := []string{
-		demoItemJSON(1001, "Demo A", 101),
-		demoItemJSON(1002, "Demo B", 101),
-		demoItemJSON(1003, "Demo C", 102),
-		demoItemJSON(1004, "Demo D", 103),
-		demoItemJSON(1005, "Demo E", 103),
+		demoItemJSONWithTags(1001, "Demo A", 101, `{"tagid":1716,"weight":7},{"tagid":1628,"weight":3}`),
+		demoItemJSONWithTags(1002, "Demo B", 101, `{"tagid":1716,"weight":5}`),
+		demoItemJSONWithTags(1003, "Demo C", 102, `{"tagid":1628,"weight":2}`),
+		demoItemJSONWithTags(1004, "Demo D", 103, `{"tagid":1716,"weight":1}`),
+		demoItemJSONWithTags(1005, "Demo E", 103, ""),
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := log.record(r)
 		switch r.URL.Path {
 		case demosQueryPath:
 			fmt.Fprint(w, storeResponse(50, 0, 5, items))
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
 		case demosGetItemsPath:
 			ids := getItemsIDs(t, p)
 			parts := make([]string, 0, len(ids))
@@ -335,14 +383,14 @@ func TestDemosParentEnrichmentIsTwoRequestsPerPage(t *testing.T) {
 	if got := log.count(demosQueryPath); got != 1 {
 		t.Errorf("Query requests = %d, want 1", got)
 	}
+	if got := log.count(demosGetTagListPath); got != 1 {
+		t.Errorf("GetTagList requests = %d, want 1 (tag dictionary for row names)", got)
+	}
 	if got := log.count(demosGetItemsPath); got != 1 {
 		t.Errorf("GetItems requests = %d, want 1 (one lookup for every parent)", got)
 	}
-	if got := log.count(demosGetTagListPath); got != 0 {
-		t.Errorf("GetTagList requests = %d, want 0 (SkipTagNames)", got)
-	}
-	if got := log.total(); got != 2 {
-		t.Errorf("total requests = %d, want exactly 2", got)
+	if got := log.total(); got != 3 {
+		t.Errorf("total requests = %d, want exactly 3 (Query + GetTagList + GetItems)", got)
 	}
 	wantIDs := []int64{101, 102, 103}
 	if got := getItemsIDs(t, log.last(t, demosGetItemsPath)); !reflect.DeepEqual(got, wantIDs) {
@@ -352,11 +400,15 @@ func TestDemosParentEnrichmentIsTwoRequestsPerPage(t *testing.T) {
 	if len(results) != 5 {
 		t.Fatalf("results = %d, want 5", len(results))
 	}
+	wantParents := []string{"Full game 101", "Full game 101", "Full game 102", "Full game 103", "Full game 103"}
+	wantTags := [][]string{{"Roguelike", "Metroidvania"}, {"Roguelike"}, {"Metroidvania"}, {"Roguelike"}, {}}
 	for i, r := range results {
 		row := r.(map[string]any)
-		want := fmt.Sprintf("Full game %d", int64([]int{101, 101, 102, 103, 103}[i]))
-		if row["parent_name"] != want {
-			t.Errorf("results[%d].parent_name = %v, want %q", i, row["parent_name"], want)
+		if row["parent_name"] != wantParents[i] {
+			t.Errorf("results[%d].parent_name = %v, want %q", i, row["parent_name"], wantParents[i])
+		}
+		if got := rowTagNames(row); !reflect.DeepEqual(got, wantTags[i]) {
+			t.Errorf("results[%d] tag names = %v, want %v", i, got, wantTags[i])
 		}
 	}
 	meta, _ := env["meta"].(map[string]any)
@@ -373,6 +425,8 @@ func TestDemosParentLookupFailureDegrades(t *testing.T) {
 		switch r.URL.Path {
 		case demosQueryPath:
 			fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(1001, "Demo A", 101)}))
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
 		case demosGetItemsPath:
 			w.WriteHeader(http.StatusInternalServerError)
 		default:
@@ -415,10 +469,14 @@ func TestDemosTitleSetsTruncatedWhenTotalExceedsReturned(t *testing.T) {
 		log := newDemosReqLog()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log.record(r)
-			if r.URL.Path != demosSearchPath {
+			switch r.URL.Path {
+			case demosSearchPath:
+				fmt.Fprint(w, storeResponse(1500, 0, 1000, manyDemoItems(1000)))
+			case demosGetTagListPath:
+				fmt.Fprint(w, demosTagListJSON)
+			default:
 				t.Errorf("unexpected path %s", r.URL.Path)
 			}
-			fmt.Fprint(w, storeResponse(1500, 0, 1000, manyDemoItems(1000)))
 		}))
 		defer srv.Close()
 		withSteamHook(t, srv)
@@ -443,6 +501,10 @@ func TestDemosTitleSetsTruncatedWhenTotalExceedsReturned(t *testing.T) {
 		log := newDemosReqLog()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log.record(r)
+			if r.URL.Path == demosGetTagListPath {
+				fmt.Fprint(w, demosTagListJSON)
+				return
+			}
 			fmt.Fprint(w, storeResponse(25, 0, 25, manyDemoItems(25)))
 		}))
 		defer srv.Close()
@@ -493,6 +555,159 @@ func TestDemosTitleRejectsPage(t *testing.T) {
 	}
 	if requests != 0 {
 		t.Errorf("HTTP requests = %d, want 0 (rejected before any fetch)", requests)
+	}
+}
+
+func TestDemosPageWithTagFlagIsStillThreeRequests(t *testing.T) {
+	demosIsolateEnv(t)
+	log := newDemosReqLog()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := log.record(r)
+		switch r.URL.Path {
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
+		case demosQueryPath:
+			fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSONWithTags(1001, "Demo A", 101, `{"tagid":1716,"weight":7}`)}))
+		case demosGetItemsPath:
+			ids := getItemsIDs(t, p)
+			parts := make([]string, 0, len(ids))
+			for _, id := range ids {
+				parts = append(parts, fmt.Sprintf(`{"appid":%d,"success":1,"visible":true,"name":"Full game %d"}`, id, id))
+			}
+			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	withSteamHook(t, srv)
+
+	if _, _, err := runDemosCmd(t, "--tag", "Roguelike"); err != nil {
+		t.Fatalf("steam demos --tag: %v", err)
+	}
+	if got := log.count(demosGetTagListPath); got != 1 {
+		t.Errorf("GetTagList requests = %d, want 1 (fetched once and reused for --tag resolution)", got)
+	}
+	if got := log.count(demosQueryPath); got != 1 {
+		t.Errorf("Query requests = %d, want 1", got)
+	}
+	if got := log.count(demosGetItemsPath); got != 1 {
+		t.Errorf("GetItems requests = %d, want 1", got)
+	}
+	if got := log.total(); got != 3 {
+		t.Errorf("total requests = %d, want exactly 3 even with --tag (dictionary is shared)", got)
+	}
+	filters := nestedMap(t, log.last(t, demosQueryPath), "query", "filters")
+	if got := tagGroupsFromFilters(t, filters); !reflect.DeepEqual(got, [][]int{{1716}}) {
+		t.Errorf("tagids_must_match = %v, want [[1716]]", got)
+	}
+}
+
+func TestDemosTitleDefaultLimitIs100(t *testing.T) {
+	t.Run("title default", func(t *testing.T) {
+		demosIsolateEnv(t)
+		log := newDemosReqLog()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.record(r)
+			switch r.URL.Path {
+			case demosSearchPath:
+				fmt.Fprint(w, storeResponse(0, 0, 0, nil))
+			case demosGetTagListPath:
+				fmt.Fprint(w, demosTagListJSON)
+			default:
+				t.Errorf("unexpected path %s", r.URL.Path)
+			}
+		}))
+		defer srv.Close()
+		withSteamHook(t, srv)
+
+		if _, _, err := runDemosCmd(t, "--title", "portal"); err != nil {
+			t.Fatalf("steam demos --title: %v", err)
+		}
+		if got := log.last(t, demosSearchPath)["max_results"]; got != float64(100) {
+			t.Errorf("SearchSuggestions max_results = %v, want 100 (--title default when --limit is unset)", got)
+		}
+	})
+	t.Run("title explicit limit", func(t *testing.T) {
+		demosIsolateEnv(t)
+		log := newDemosReqLog()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.record(r)
+			switch r.URL.Path {
+			case demosSearchPath:
+				fmt.Fprint(w, storeResponse(0, 0, 0, nil))
+			case demosGetTagListPath:
+				fmt.Fprint(w, demosTagListJSON)
+			default:
+				t.Errorf("unexpected path %s", r.URL.Path)
+			}
+		}))
+		defer srv.Close()
+		withSteamHook(t, srv)
+
+		if _, _, err := runDemosCmd(t, "--title", "portal", "--limit", "1000"); err != nil {
+			t.Fatalf("steam demos --title --limit: %v", err)
+		}
+		if got := log.last(t, demosSearchPath)["max_results"]; got != float64(1000) {
+			t.Errorf("SearchSuggestions max_results = %v, want 1000 (explicit --limit wins)", got)
+		}
+	})
+	t.Run("browse default", func(t *testing.T) {
+		demosIsolateEnv(t)
+		log := newDemosReqLog()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.record(r)
+			switch r.URL.Path {
+			case demosQueryPath:
+				fmt.Fprint(w, storeResponse(0, 0, 0, nil))
+			case demosGetTagListPath:
+				fmt.Fprint(w, demosTagListJSON)
+			default:
+				t.Errorf("unexpected path %s", r.URL.Path)
+			}
+		}))
+		defer srv.Close()
+		withSteamHook(t, srv)
+
+		if _, _, err := runDemosCmd(t); err != nil {
+			t.Fatalf("steam demos: %v", err)
+		}
+		if got := int(nestedMap(t, log.last(t, demosQueryPath), "query")["count"].(float64)); got != 20 {
+			t.Errorf("Query count = %d, want 20 (browse default without --title)", got)
+		}
+	})
+}
+
+func TestDemosBareCommandLists(t *testing.T) {
+	demosIsolateEnv(t)
+	log := newDemosReqLog()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.record(r)
+		switch r.URL.Path {
+		case demosQueryPath:
+			fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(600, "Demo One", 0)}))
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	withSteamHook(t, srv)
+
+	env, _, err := runDemosCmd(t)
+	if err != nil {
+		t.Fatalf("bare steam demos must list, not print help: %v", err)
+	}
+	if env == nil {
+		t.Fatal("bare steam demos printed no JSON results")
+	}
+	if got := log.count(demosQueryPath); got != 1 {
+		t.Errorf("Query requests = %d, want 1 (bare command lists the first page)", got)
+	}
+	results, _ := env["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
 	}
 }
 

@@ -34,19 +34,22 @@ type steamDemoView struct {
 // title batch's truncation, and the request budget.
 const steamDemosLong = `Demos only: this command fixes the app type to "demo" and never returns
 full games. Free-to-play titles are not demos - use "steam browse --free" for
-those. Each row carries the full game the demo belongs to.
+those. Each row carries the full game the demo belongs to, and the human table
+shows the demo's first few store tag names.
 
 Every --tag must be present (the store service ANDs across tags). --title runs a
-single text-search batch of up to 1000 results; that endpoint ignores offsets,
-so the batch reports meta.truncated instead of a next page, and --page is
-rejected with --title.
+single text-search batch of 100 results by default (raise --limit up to 1000);
+that endpoint ignores offsets, so the batch reports meta.truncated instead of a
+next page, and --page is rejected with --title.
 
 Request budget per invocation:
-  - a browse page costs 2 requests: one catalog Query plus one GetItems lookup
-    for the full-game names of every parent on the page;
-  - each --tag adds one GetTagList request to turn tag names into ids;
-  - a --title batch costs 1 SearchSuggestions request plus one name lookup per
-    200 full games.
+  - a browse page costs 3 requests: one catalog Query, one GetTagList lookup
+    for the tag-name dictionary, and one GetItems lookup for the full-game
+    names of every parent on the page;
+  - the tag-name dictionary is fetched once and shared with --tag resolution,
+    so adding --tag does not add a request;
+  - a --title batch costs 1 SearchSuggestions request, 1 GetTagList request for
+    the tag-name dictionary, plus one name lookup per 200 full games.
 
 Both the browse and --title paths default to released demos ("available now"),
 and --coming-soon swaps that for unreleased demos only. Either way the release
@@ -76,13 +79,13 @@ func newSteamDemosCmd(flags *rootFlags) *cobra.Command {
 			"pp:happy-args":  "--limit=20;--dry-run",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 && cmd.Flags().NFlag() == 0 {
-				return cmd.Help()
-			}
 			if dryRunOK(flags) {
 				return writeDryRun(cmd.OutOrStdout(), flags, "steam demos")
 			}
 			title = strings.TrimSpace(title)
+			if title != "" && !cmd.Flags().Changed("limit") {
+				limit = 100
+			}
 			if page < 1 {
 				return usageErrWithJSON(cmd, flags, cmd.CommandPath()+" --page <n>", "--page must be 1 or greater")
 			}
@@ -137,6 +140,7 @@ func newSteamDemosCmd(flags *rootFlags) *cobra.Command {
 					return classifySteamError(serr)
 				}
 				items = p.Items
+				c.AttachTagNames(ctx, items)
 				meta.Title = title
 				meta.Total = p.Total
 				truncated := p.Truncated()
@@ -149,7 +153,6 @@ func newSteamDemosCmd(flags *rootFlags) *cobra.Command {
 					ReleasedOnly: !comingSoon,
 					Start:        (page - 1) * limit,
 					Count:        limit,
-					SkipTagNames: true,
 				})
 				if berr != nil {
 					return classifySteamError(berr)
@@ -178,7 +181,7 @@ func newSteamDemosCmd(flags *rootFlags) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "Only demos whose title matches this term (one batch, up to 1000; the text-search endpoint ignores offsets, so --page is rejected with --title)")
 	cmd.Flags().StringSliceVar(&tags, "tag", nil, "Store tag name or tagid that every result must carry (repeatable or comma-separated, e.g. --tag Roguelike,Metroidvania)")
 	cmd.Flags().BoolVar(&comingSoon, "coming-soon", false, "Only unreleased demos; without it both paths return available-now demos (server-side filter)")
-	cmd.Flags().IntVar(&limit, "limit", 20, "Results per page (1-100 without --title, 1-1000 with --title)")
+	cmd.Flags().IntVar(&limit, "limit", 20, "Results per page (default 20; 100 with --title)")
 	cmd.Flags().IntVar(&page, "page", 1, "Page number, 1-based (browse only; rejected with --title)")
 	cmd.Flags().StringVar(&country, "country", "", "ISO 3166-1 alpha-2 storefront region (default STEAM_COUNTRY, ITAD_COUNTRY, or US)")
 	cmd.Flags().StringVar(&lang, "lang", "", "Store locale for store text (default english)")
@@ -253,9 +256,29 @@ func renderSteamDemoItems(cmd *cobra.Command, heading string, rows []steamDemoRo
 			"released":  orDash(row.ReleaseDate),
 			"platforms": steamPlatformLabel(row.StoreItem),
 			"flags":     steamFlagLabel(row.StoreItem),
+			"tags":      steamDemoTagLabel(row.StoreItem),
 		})
 	}
 	return printAutoTable(w, out)
+}
+
+// steamDemoTagLabel renders the first three named store tags for the demos
+// table, comma-separated, or "-" when the record carries no named tags.
+func steamDemoTagLabel(item steam.StoreItem) string {
+	names := make([]string, 0, 3)
+	for _, t := range item.Tags {
+		if strings.TrimSpace(t.Name) == "" {
+			continue
+		}
+		names = append(names, t.Name)
+		if len(names) == 3 {
+			break
+		}
+	}
+	if len(names) == 0 {
+		return "-"
+	}
+	return strings.Join(names, ",")
 }
 
 // steamPlatformLabel lists the desktop platforms the store marks available.

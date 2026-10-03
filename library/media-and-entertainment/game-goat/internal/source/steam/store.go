@@ -818,6 +818,14 @@ func (c *Client) tagNames(ctx context.Context) (map[int]string, error) {
 	return names, nil
 }
 
+// AttachTagNames fills Tag.Name on items from the cached tag dictionary. It is
+// the exported seam for callers (such as the demos --title path) whose endpoint
+// does not attach names itself. The dictionary is shared with ResolveTag, so a
+// caller that already resolved a --tag pays no extra request.
+func (c *Client) AttachTagNames(ctx context.Context, items []StoreItem) {
+	c.attachTagNames(ctx, items)
+}
+
 // attachTagNames fills Tag.Name from the tag dictionary. A failure is never
 // fatal: ids stay usable and the record still ships.
 func (c *Client) attachTagNames(ctx context.Context, items []StoreItem) {
