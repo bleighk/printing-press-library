@@ -887,7 +887,7 @@ func TestItemsChunksAt200(t *testing.T) {
 			parts := make([]string, 0, len(list))
 			for _, e := range list {
 				entry, _ := e.(map[string]any)
-				parts = append(parts, fmt.Sprintf(`{"appid":%v,"success":1,"name":"App %v"}`, entry["appid"], entry["appid"]))
+				parts = append(parts, fmt.Sprintf(`{"appid":%v,"success":1,"visible":true,"name":"App %v"}`, entry["appid"], entry["appid"]))
 			}
 			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
 		case getTagListPath:
@@ -1112,7 +1112,7 @@ func TestAppNamesChunksAndSkipsTags(t *testing.T) {
 			parts := make([]string, 0, len(list))
 			for _, e := range list {
 				entry, _ := e.(map[string]any)
-				parts = append(parts, fmt.Sprintf(`{"appid":%v,"success":1,"name":"Name %v"}`, entry["appid"], entry["appid"]))
+				parts = append(parts, fmt.Sprintf(`{"appid":%v,"success":1,"visible":true,"name":"Name %v"}`, entry["appid"], entry["appid"]))
 			}
 			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
 		case getTagListPath:
@@ -1160,8 +1160,8 @@ func TestDemoLinksMapsDemosAndChunks(t *testing.T) {
 		}
 		seen = inputJSON(t, r)
 		fmt.Fprint(w, `{"response":{"store_items":[
-			{"appid":1,"success":1,"name":"With Demo","related_items":{"demos":[{"appid":5,"description":""}]}},
-			{"appid":2,"success":1,"name":"No Demo"}
+			{"appid":1,"success":1,"visible":true,"name":"With Demo","related_items":{"demos":[{"appid":5,"description":""}]}},
+			{"appid":2,"success":1,"visible":true,"name":"No Demo"}
 		]}}`)
 	})
 
@@ -1208,5 +1208,84 @@ func TestDemoLinksMapsDemosAndChunks(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&items); got != 3 {
 		t.Errorf("GetItems requests = %d, want 3 for 450 ids", got)
+	}
+}
+
+// TestItemsHiddenAppIsTypedNotFound: GetItems answers an app hidden from
+// anonymous requests (age or region gate) with success:15 and visible:false.
+// That is not a found record: only success:1 is real. Item must return the
+// typed ErrAppHidden (which wraps ErrAppNotFound) rather than an empty record.
+func TestItemsHiddenAppIsTypedNotFound(t *testing.T) {
+	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != getItemsPath {
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"response":{"store_items":[{"item_type":0,"id":1245690,"success":15,"visible":false,"name":"","store_url_path":"app/0/","store_url_slug":"","appid":0}]}}`)
+	})
+	_, err := c.Item(context.Background(), 1245690)
+	if !errors.Is(err, ErrAppHidden) {
+		t.Fatalf("Item error = %v, want ErrAppHidden", err)
+	}
+	if !errors.Is(err, ErrAppNotFound) {
+		t.Fatalf("Item error = %v, want it to wrap ErrAppNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "1245690") || !strings.Contains(err.Error(), "hidden") {
+		t.Fatalf("Item error = %v, want it to mention 1245690 and hidden", err)
+	}
+}
+
+// TestDemoLinksOmitsHiddenApp: a hidden appid is simply absent from the map so
+// callers report has_demo as unknown instead of false; a normal record still maps.
+func TestDemoLinksOmitsHiddenApp(t *testing.T) {
+	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != getItemsPath {
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"response":{"store_items":[
+			{"item_type":0,"id":1245690,"success":15,"visible":false,"name":"","appid":0},
+			{"item_type":0,"id":379720,"appid":379720,"success":1,"visible":true,"name":"DOOM","related_items":{"demos":[{"appid":479030}]}}
+		]}}`)
+	})
+	links, err := c.DemoLinks(context.Background(), []int64{1245690, 379720})
+	if err != nil {
+		t.Fatalf("DemoLinks: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("links = %v, want only the found id", links)
+	}
+	if _, ok := links[1245690]; ok {
+		t.Error("a hidden app must be absent from the demo-link map")
+	}
+	if demos := links[379720]; len(demos) != 1 || demos[0] != 479030 {
+		t.Errorf("links[379720] = %v, want [479030]", demos)
+	}
+}
+
+// TestAppNamesOmitsHiddenApp: same rule for names — hidden ids are absent.
+func TestAppNamesOmitsHiddenApp(t *testing.T) {
+	c := newTestCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != getItemsPath {
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"response":{"store_items":[
+			{"item_type":0,"id":1245690,"success":15,"visible":false,"name":"","appid":0},
+			{"item_type":0,"id":379720,"appid":379720,"success":1,"visible":true,"name":"DOOM"}
+		]}}`)
+	})
+	names, err := c.AppNames(context.Background(), []int64{1245690, 379720})
+	if err != nil {
+		t.Fatalf("AppNames: %v", err)
+	}
+	if len(names) != 1 || names[379720] != "DOOM" {
+		t.Fatalf("names = %v, want only 379720 mapped to DOOM", names)
+	}
+	if _, ok := names[1245690]; ok {
+		t.Error("a hidden app must be absent from the name map")
 	}
 }

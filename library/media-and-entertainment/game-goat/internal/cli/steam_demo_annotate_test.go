@@ -232,9 +232,9 @@ func TestBulkWithDemosBatchesLookups(t *testing.T) {
 		for _, id := range ids {
 			switch id {
 			case 501:
-				items = append(items, "{\"appid\":501,\"success\":1,\"name\":\"Alpha\",\"related_items\":{\"demos\":[{\"appid\":777,\"description\":\"\"}]}}")
+				items = append(items, "{\"appid\":501,\"success\":1,\"visible\":true,\"name\":\"Alpha\",\"related_items\":{\"demos\":[{\"appid\":777,\"description\":\"\"}]}}")
 			case 502:
-				items = append(items, "{\"appid\":502,\"success\":1,\"name\":\"Beta\"}")
+				items = append(items, "{\"appid\":502,\"success\":1,\"visible\":true,\"name\":\"Beta\"}")
 			default:
 				t.Errorf("unexpected appid %d in GetItems", id)
 			}

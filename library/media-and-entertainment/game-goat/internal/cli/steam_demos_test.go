@@ -318,7 +318,7 @@ func TestDemosParentEnrichmentIsTwoRequestsPerPage(t *testing.T) {
 			ids := getItemsIDs(t, p)
 			parts := make([]string, 0, len(ids))
 			for _, id := range ids {
-				parts = append(parts, fmt.Sprintf(`{"appid":%d,"success":1,"name":"Full game %d"}`, id, id))
+				parts = append(parts, fmt.Sprintf(`{"appid":%d,"success":1,"visible":true,"name":"Full game %d"}`, id, id))
 			}
 			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
 		default:
@@ -560,12 +560,12 @@ func TestSteamAppRowHasDemo(t *testing.T) {
 	}{
 		{
 			name:       "demo links present",
-			storeItem:  `{"item_type":0,"id":379720,"appid":379720,"success":1,"name":"DOOM","type":0,"related_items":{"demo_appid":[479030],"demos":[{"appid":479030}]}}`,
+			storeItem:  `{"item_type":0,"id":379720,"appid":379720,"success":1,"visible":true,"name":"DOOM","type":0,"related_items":{"demo_appid":[479030],"demos":[{"appid":479030}]}}`,
 			wantHasDem: true,
 		},
 		{
 			name:       "no demo links",
-			storeItem:  `{"item_type":0,"id":1199790,"appid":1199790,"success":1,"name":"DOOM Eternal","type":0}`,
+			storeItem:  `{"item_type":0,"id":1199790,"appid":1199790,"success":1,"visible":true,"name":"DOOM Eternal","type":0}`,
 			wantHasDem: false,
 		},
 	}

@@ -68,6 +68,12 @@ const (
 // guessing; a wrong match presents another game's reviews and price.
 var ErrAmbiguousApp = errors.New("steam: title matched multiple store apps")
 
+// ErrAppHidden: the app exists but is hidden from anonymous store requests
+// (age or region gate). It wraps ErrAppNotFound so existing not-found handling
+// and the CLI's not-found exit code still apply; callers that can distinguish
+// the cases report the store record and demo state as unknown instead of empty.
+var ErrAppHidden = fmt.Errorf("%w: hidden from anonymous store requests (age or region gate)", ErrAppNotFound)
+
 // AppType is the typed app taxonomy the store services expose. Steam models
 // "free to play" and "early access" as ATTRIBUTES (is_free, the Early Access
 // tag), not as types, so those are fields on StoreItem rather than AppType
@@ -571,19 +577,23 @@ func (c *Client) Browse(ctx context.Context, opts BrowseOptions) (*Page, error) 
 // Items returns full typed records for a batch of appids in one request. It is
 // the "app details as a full typed record" path: one request for many apps,
 // unlike the storefront appdetails endpoint. When no appid yields a record the
-// typed ErrAppNotFound is returned.
+// typed ErrAppNotFound is returned; when the only records for the requested ids
+// are hidden from anonymous requests (age or region gate), ErrAppHidden is
+// returned instead so callers report the record and demo state as unknown.
 func (c *Client) Items(ctx context.Context, appIDs []int64) ([]StoreItem, error) {
 	if len(appIDs) == 0 {
 		return nil, nil
 	}
 	var items []StoreItem
 	var lastErr error
+	var hidden []int64
 	for _, chunk := range chunkIDs(appIDs, MaxItemsPerRequest) {
-		wires, err := c.getItemsChunk(ctx, chunk, storeDataRequest())
+		wires, hiddenIDs, err := c.getItemsChunk(ctx, chunk, storeDataRequest())
 		if err != nil {
 			lastErr = err
 			continue
 		}
+		hidden = append(hidden, hiddenIDs...)
 		if len(wires) == 0 {
 			lastErr = fmt.Errorf("%w: app %s (store service returned no record)", ErrAppNotFound, joinIDs(chunk))
 			continue
@@ -593,6 +603,9 @@ func (c *Client) Items(ctx context.Context, appIDs []int64) ([]StoreItem, error)
 		}
 	}
 	if len(items) == 0 {
+		if len(hidden) > 0 {
+			return nil, fmt.Errorf("%w: app %s; the store record and demo state are unknown", ErrAppHidden, joinIDs(hidden))
+		}
 		if lastErr != nil {
 			return nil, lastErr
 		}
@@ -603,9 +616,11 @@ func (c *Client) Items(ctx context.Context, appIDs []int64) ([]StoreItem, error)
 }
 
 // getItemsChunk issues one GetItems request for appIDs and returns the wire
-// records the service marked successful. Items, AppNames, and DemoLinks all go
-// through it; they differ only in the data_request they need.
-func (c *Client) getItemsChunk(ctx context.Context, appIDs []int64, dataRequest map[string]any) ([]storeItemWire, error) {
+// records the service actually returned (success == 1 and visible) plus the
+// appids the service answered as hidden (success != 1 or visible false). Items,
+// AppNames, and DemoLinks all go through it; they differ only in the
+// data_request they need and in how they treat the hidden ids.
+func (c *Client) getItemsChunk(ctx context.Context, appIDs []int64, dataRequest map[string]any) ([]storeItemWire, []int64, error) {
 	ids := make([]map[string]any, 0, len(appIDs))
 	for _, id := range appIDs {
 		ids = append(ids, map[string]any{"appid": id})
@@ -617,16 +632,27 @@ func (c *Client) getItemsChunk(ctx context.Context, appIDs []int64, dataRequest 
 	}
 	var wire storeResponseWire
 	if err := c.serviceGet(ctx, getItemsPath, payload, &wire); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make([]storeItemWire, 0, len(wire.Response.StoreItems))
+	var hidden []int64
 	for _, w := range wire.Response.StoreItems {
-		if w.Success == 0 {
+		// Only EResult 1 (OK) is a real record. success:15 and visible:false
+		// mark an app hidden from anonymous requests (age or region gate);
+		// counting it as found yields an empty name and a false has_demo.
+		if w.Success != 1 || !w.Visible {
+			id := w.AppID
+			if id == 0 {
+				id = w.ID
+			}
+			if id != 0 {
+				hidden = append(hidden, id)
+			}
 			continue
 		}
 		out = append(out, w)
 	}
-	return out, nil
+	return out, hidden, nil
 }
 
 // Item returns the full typed record for exactly one appid.
@@ -652,7 +678,7 @@ func (c *Client) AppNames(ctx context.Context, ids []int64) (map[int64]string, e
 	requested := false
 	var lastErr error
 	for _, chunk := range chunks {
-		wires, err := c.getItemsChunk(ctx, chunk, map[string]any{"include_basic_info": true})
+		wires, _, err := c.getItemsChunk(ctx, chunk, map[string]any{"include_basic_info": true})
 		if err != nil {
 			lastErr = err
 			continue
@@ -685,7 +711,7 @@ func (c *Client) DemoLinks(ctx context.Context, ids []int64) (map[int64][]int64,
 	requested := false
 	var lastErr error
 	for _, chunk := range chunks {
-		wires, err := c.getItemsChunk(ctx, chunk, map[string]any{
+		wires, _, err := c.getItemsChunk(ctx, chunk, map[string]any{
 			"include_basic_info":    true,
 			"include_related_items": true,
 		})
