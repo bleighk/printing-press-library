@@ -2655,6 +2655,7 @@ func isCompactGravityField(name string) bool {
 var compactAlwaysKeepFields = map[string]bool{
 	"steam_app_id": true, "has_demo": true, "demo_app_ids": true,
 	"app_id": true, "parent_app_id": true, "parent_name": true,
+	"parent_tags": true,
 }
 
 // compactListFields keeps only high-gravity fields for array responses.

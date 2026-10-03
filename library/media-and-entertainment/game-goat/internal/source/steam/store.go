@@ -58,6 +58,10 @@ const (
 	earlyAccessTagID = 493
 	// tagCount is how many weighted tags the service is asked to return per item.
 	tagCount = 10
+	// parentTagCount is how many weighted tags the demos parent lookup asks
+	// for. Steam caps an item's tags at 20, and a full game's tags stand in for
+	// its demo's own tags (demos almost never carry tags).
+	parentTagCount = 20
 
 	// storeItemAssetBase prefixes the asset_url_format field of GetItems.
 	storeItemAssetBase = "https://shared.akamai.steamstatic.com/store_item_assets/"
@@ -643,8 +647,8 @@ func (c *Client) Items(ctx context.Context, appIDs []int64) ([]StoreItem, error)
 // getItemsChunk issues one GetItems request for appIDs and returns the wire
 // records the service actually returned (success == 1 and visible) plus the
 // appids the service answered as hidden (success != 1 or visible false). Items,
-// AppNames, and DemoLinks all go through it; they differ only in the
-// data_request they need and in how they treat the hidden ids.
+// AppNames, AppSummaries, and DemoLinks all go through it; they differ only in
+// the data_request they need and in how they treat the hidden ids.
 func (c *Client) getItemsChunk(ctx context.Context, appIDs []int64, dataRequest map[string]any) ([]storeItemWire, []int64, error) {
 	ids := make([]map[string]any, 0, len(appIDs))
 	for _, id := range appIDs {
@@ -724,6 +728,72 @@ func (c *Client) AppNames(ctx context.Context, ids []int64) (map[int64]string, e
 		return nil, lastErr
 	}
 	return names, nil
+}
+
+// AppSummary is the demos parent-lookup record: the full game's display name
+// plus its store tags. Demos rarely carry tags of their own, so the parent's
+// tags are what makes a demos row useful; name and tags arrive in the same
+// GetItems request.
+type AppSummary struct {
+	Name string `json:"name"`
+	Tags []Tag  `json:"tags,omitempty"`
+}
+
+// AppSummaries maps appids to their store name AND tags in ONE GetItems
+// request per MaxItemsPerRequest chunk, asking for include_tag_count (Steam
+// caps an item's tags at 20). Ids that yield no record are absent, matching
+// AppNames. Tag.Name is filled from the cached tag dictionary — the same one
+// a demos page already fetched for its own rows — so the parent lookup adds no
+// request.
+func (c *Client) AppSummaries(ctx context.Context, ids []int64) (map[int64]AppSummary, error) {
+	unique := dedupePositiveIDs(ids)
+	summaries := make(map[int64]AppSummary, len(unique))
+	chunks := chunkIDs(unique, MaxItemsPerRequest)
+	requested := false
+	var lastErr error
+	for _, chunk := range chunks {
+		wires, _, err := c.getItemsChunk(ctx, chunk, map[string]any{
+			"include_basic_info": true,
+			"include_tag_count":  parentTagCount,
+		})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		requested = true
+		for _, w := range wires {
+			appID := w.AppID
+			if appID == 0 {
+				appID = w.ID
+			}
+			if appID == 0 {
+				continue
+			}
+			summaries[appID] = AppSummary{Name: w.Name, Tags: tagsFrom(w)}
+		}
+	}
+	if len(chunks) > 0 && !requested {
+		return nil, lastErr
+	}
+	c.attachSummaryTagNames(ctx, summaries)
+	return summaries, nil
+}
+
+// attachSummaryTagNames fills Tag.Name on each summary from the cached tag
+// dictionary, best-effort like attachTagNames: a dictionary failure leaves
+// ids usable.
+func (c *Client) attachSummaryTagNames(ctx context.Context, summaries map[int64]AppSummary) {
+	if len(summaries) == 0 {
+		return
+	}
+	names, err := c.tagNames(ctx)
+	if err != nil {
+		return
+	}
+	for id, summary := range summaries {
+		applyTagNames(summary.Tags, names)
+		summaries[id] = summary
+	}
 }
 
 // DemoLinks maps each appid to the demo appids GetItems reports for it. A found
@@ -862,10 +932,16 @@ func (c *Client) attachTagNames(ctx context.Context, items []StoreItem) {
 		return
 	}
 	for i := range items {
-		for j := range items[i].Tags {
-			if name, ok := names[items[i].Tags[j].ID]; ok {
-				items[i].Tags[j].Name = name
-			}
+		applyTagNames(items[i].Tags, names)
+	}
+}
+
+// applyTagNames copies names onto tags by id; ids absent from the dictionary
+// keep an empty Name and stay usable.
+func applyTagNames(tags []Tag, names map[int]string) {
+	for j := range tags {
+		if name, ok := names[tags[j].ID]; ok {
+			tags[j].Name = name
 		}
 	}
 }

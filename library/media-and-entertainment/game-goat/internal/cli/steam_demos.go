@@ -21,7 +21,8 @@ import (
 // full game it belongs to. The parent appid already rides on StoreItem.
 type steamDemoRow struct {
 	steam.StoreItem
-	ParentName string `json:"parent_name,omitempty"`
+	ParentName string   `json:"parent_name,omitempty"`
+	ParentTags []string `json:"parent_tags,omitempty"`
 }
 
 // steamDemoView is the demos envelope, shaped like the `steam browse` one.
@@ -34,8 +35,10 @@ type steamDemoView struct {
 // title batch's truncation, and the request budget.
 const steamDemosLong = `Demos only: this command fixes the app type to "demo" and never returns
 full games. Free-to-play titles are not demos - use "steam browse --free" for
-those. Each row carries the full game the demo belongs to, and the human table
-shows the demo's first few store tag names.
+those. Each row carries the full game the demo belongs to: its parent_name and
+parent_tags (the full game's tag names, in Steam's order). A demo's OWN tags
+appear as "tags" only when Steam lists any - most demos have none. The human
+table's "full game tags" column shows the first few parent_tags.
 
 Every --tag must be present (the store service ANDs across tags). --title runs a
 single text-search batch of 100 results by default (raise --limit up to 1000);
@@ -45,11 +48,11 @@ next page, and --page is rejected with --title.
 Request budget per invocation:
   - a browse page costs 3 requests: one catalog Query, one GetTagList lookup
     for the tag-name dictionary, and one GetItems lookup for the full-game
-    names of every parent on the page;
-  - the tag-name dictionary is fetched once and shared with --tag resolution,
-    so adding --tag does not add a request;
+    names AND tags of every parent on the page;
+  - the tag-name dictionary is fetched once and shared with --tag resolution
+    and the parent lookup, so adding --tag does not add a request;
   - a --title batch costs 1 SearchSuggestions request, 1 GetTagList request for
-    the tag-name dictionary, plus one name lookup per 200 full games.
+    the tag-name dictionary, plus one name+tag lookup per 200 full games.
 
 Both the browse and --title paths default to released demos ("available now"),
 and --coming-soon swaps that for unreleased demos only. Either way the release
@@ -166,7 +169,7 @@ func newSteamDemosCmd(flags *rootFlags) *cobra.Command {
 			}
 
 			rows := demoRows(items)
-			if _, perr := attachDemoParentNames(ctx, c, rows); perr != nil {
+			if _, perr := attachDemoParentSummaries(ctx, c, rows); perr != nil {
 				meta.SourcesMissing = append(meta.SourcesMissing, "steam_parent")
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: steam full-game names unavailable (sources_missing: steam_parent): %v\n", perr)
 			}
@@ -196,10 +199,12 @@ func demoRows(items []steam.StoreItem) []steamDemoRow {
 	return rows
 }
 
-// attachDemoParentNames fills ParentName from one AppNames lookup over the
-// unique parent appids on the page. A failure is reported to the caller (so it
-// can degrade to sources_missing) but never drops the demo rows.
-func attachDemoParentNames(ctx context.Context, c *steam.Client, rows []steamDemoRow) ([]int64, error) {
+// attachDemoParentSummaries fills ParentName and ParentTags from one
+// AppSummaries lookup over the unique parent appids on the page. The full
+// game's tags arrive in the same GetItems request as its name, so the page
+// stays at three requests. A failure is reported to the caller (so it can
+// degrade to sources_missing) but never drops the demo rows.
+func attachDemoParentSummaries(ctx context.Context, c *steam.Client, rows []steamDemoRow) ([]int64, error) {
 	seen := map[int64]bool{}
 	var ids []int64
 	for _, row := range rows {
@@ -211,16 +216,31 @@ func attachDemoParentNames(ctx context.Context, c *steam.Client, rows []steamDem
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	names, err := c.AppNames(ctx, ids)
+	summaries, err := c.AppSummaries(ctx, ids)
 	if err != nil {
 		return ids, err
 	}
 	for i := range rows {
-		if name, ok := names[rows[i].ParentAppID]; ok {
-			rows[i].ParentName = name
+		summary, ok := summaries[rows[i].ParentAppID]
+		if !ok {
+			continue
 		}
+		rows[i].ParentName = summary.Name
+		rows[i].ParentTags = namedTagNames(summary.Tags)
 	}
 	return ids, nil
+}
+
+// namedTagNames keeps the named tags in order, skipping entries the dictionary
+// could not resolve.
+func namedTagNames(tags []steam.Tag) []string {
+	var out []string
+	for _, t := range tags {
+		if strings.TrimSpace(t.Name) != "" {
+			out = append(out, t.Name)
+		}
+	}
+	return out
 }
 
 func steamDemoHeading(title string, meta steamMeta, count, page int) string {
@@ -250,30 +270,25 @@ func renderSteamDemoItems(cmd *cobra.Command, heading string, rows []steamDemoRo
 			parent = "-"
 		}
 		out = append(out, map[string]any{
-			"appid":     row.AppID,
-			"name":      row.Name,
-			"full game": parent,
-			"released":  orDash(row.ReleaseDate),
-			"platforms": steamPlatformLabel(row.StoreItem),
-			"flags":     steamFlagLabel(row.StoreItem),
-			"tags":      steamDemoTagLabel(row.StoreItem),
+			"appid":          row.AppID,
+			"name":           row.Name,
+			"full game":      parent,
+			"released":       orDash(row.ReleaseDate),
+			"platforms":      steamPlatformLabel(row.StoreItem),
+			"flags":          steamFlagLabel(row.StoreItem),
+			"full game tags": steamDemoParentTagLabel(row),
 		})
 	}
 	return printAutoTable(w, out)
 }
 
-// steamDemoTagLabel renders the first three named store tags for the demos
-// table, comma-separated, or "-" when the record carries no named tags.
-func steamDemoTagLabel(item steam.StoreItem) string {
-	names := make([]string, 0, 3)
-	for _, t := range item.Tags {
-		if strings.TrimSpace(t.Name) == "" {
-			continue
-		}
-		names = append(names, t.Name)
-		if len(names) == 3 {
-			break
-		}
+// steamDemoParentTagLabel renders the first three of the full game's tag names
+// for the demos table, comma-separated, or "-" when the full game carries no
+// named tags.
+func steamDemoParentTagLabel(row steamDemoRow) string {
+	names := row.ParentTags
+	if len(names) > 3 {
+		names = names[:3]
 	}
 	if len(names) == 0 {
 		return "-"

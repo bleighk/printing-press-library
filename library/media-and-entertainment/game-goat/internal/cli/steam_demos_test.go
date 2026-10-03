@@ -837,3 +837,258 @@ func TestSteamAppRowHasDemo(t *testing.T) {
 		})
 	}
 }
+
+// parentItemJSON is a GetItems fixture record for a full game. When tagsJSON is
+// non-empty it carries the weighted tags array Steam returns for
+// include_tag_count. tagsJSON is raw, e.g. `{"tagid":1716,"weight":7}`.
+func parentItemJSON(appid int64, name, tagsJSON string) string {
+	tags := ""
+	if tagsJSON != "" {
+		tags = `,"tags":[` + tagsJSON + `]`
+	}
+	return fmt.Sprintf(`{"appid":%d,"success":1,"visible":true,"name":%q%s}`, appid, name, tags)
+}
+
+// hiddenItemJSON mimics a GetItems record for an app hidden from anonymous
+// requests (age or region gate): success:15, visible:false, appid:0.
+func hiddenItemJSON(appid int64) string {
+	return fmt.Sprintf(`{"id":%d,"appid":0,"success":15,"visible":false,"name":""}`, appid)
+}
+
+// runDemosAgentCmd executes steam demos with the same flags the real --agent
+// path sets (asJSON + agent imply compact) and returns the decoded envelope.
+func runDemosAgentCmd(t *testing.T, args ...string) map[string]any {
+	t.Helper()
+	flags := &rootFlags{asJSON: true, agent: true, compact: true}
+	cmd := newSteamDemosCmd(flags)
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs(args)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("steam demos --agent: %v stderr=%s", err, errOut.String())
+	}
+	var env map[string]any
+	if uerr := json.Unmarshal(out.Bytes(), &env); uerr != nil {
+		t.Fatalf("stdout is not JSON (%v): %q", uerr, out.String())
+	}
+	return env
+}
+
+// TestDemosParentTagsFromFullGame: a demo with no store tags of its own whose
+// full game has tags must surface those tag NAMES on the row as parent_tags, in
+// Steam's order. The demo's own (empty) tags stay omitted so the row has no
+// "tags" key. The GetItems fixture only returns tags when the request asks for
+// include_tag_count, so a dropped request field fails this test.
+func TestDemosParentTagsFromFullGame(t *testing.T) {
+	demosIsolateEnv(t)
+	log := newDemosReqLog()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := log.record(r)
+		switch r.URL.Path {
+		case demosQueryPath:
+			fmt.Fprint(w, storeResponse(1, 0, 1, []string{demoItemJSON(1001, "Demo A", 101)}))
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
+		case demosGetItemsPath:
+			dataReq, _ := p["data_request"].(map[string]any)
+			tagsJSON := ""
+			if dataReq != nil && dataReq["include_tag_count"] != nil {
+				tagsJSON = `{"tagid":1716,"weight":7},{"tagid":1628,"weight":3}`
+			}
+			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, parentItemJSON(101, "Full game 101", tagsJSON))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	withSteamHook(t, srv)
+
+	env, _, err := runDemosCmd(t, "--limit", "20")
+	if err != nil {
+		t.Fatalf("steam demos: %v", err)
+	}
+	results, _ := env["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	row := results[0].(map[string]any)
+	want := []any{"Roguelike", "Metroidvania"}
+	got, _ := row["parent_tags"].([]any)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parent_tags = %v, want the full game's tag names in order %v", row["parent_tags"], want)
+	}
+	if _, ok := row["tags"]; ok {
+		t.Errorf("the demo has no own tags, so the row must omit the tags key, got %v", row["tags"])
+	}
+}
+
+// TestDemosParentTagsPageIsThreeRequests: a browse page of five demos over three
+// unique parents stays at exactly three requests, and the one GetItems request
+// (which now also yields the full games' tags) asks for include_tag_count.
+func TestDemosParentTagsPageIsThreeRequests(t *testing.T) {
+	demosIsolateEnv(t)
+	log := newDemosReqLog()
+	items := []string{
+		demoItemJSON(1001, "Demo A", 101),
+		demoItemJSON(1002, "Demo B", 101),
+		demoItemJSON(1003, "Demo C", 102),
+		demoItemJSON(1004, "Demo D", 103),
+		demoItemJSON(1005, "Demo E", 103),
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := log.record(r)
+		switch r.URL.Path {
+		case demosQueryPath:
+			fmt.Fprint(w, storeResponse(50, 0, 5, items))
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
+		case demosGetItemsPath:
+			ids := getItemsIDs(t, p)
+			parts := make([]string, 0, len(ids))
+			for _, id := range ids {
+				parts = append(parts, parentItemJSON(id, fmt.Sprintf("Full game %d", id), `{"tagid":1716,"weight":1}`))
+			}
+			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	withSteamHook(t, srv)
+
+	if _, _, err := runDemosCmd(t, "--limit", "20"); err != nil {
+		t.Fatalf("steam demos: %v", err)
+	}
+	if got := log.count(demosQueryPath); got != 1 {
+		t.Errorf("Query requests = %d, want 1", got)
+	}
+	if got := log.count(demosGetTagListPath); got != 1 {
+		t.Errorf("GetTagList requests = %d, want 1 (shared dictionary)", got)
+	}
+	if got := log.count(demosGetItemsPath); got != 1 {
+		t.Errorf("GetItems requests = %d, want 1 (names and tags in one lookup)", got)
+	}
+	if got := log.total(); got != 3 {
+		t.Errorf("total requests = %d, want exactly 3 (Query + GetTagList + GetItems)", got)
+	}
+	wantIDs := []int64{101, 102, 103}
+	if got := getItemsIDs(t, log.last(t, demosGetItemsPath)); !reflect.DeepEqual(got, wantIDs) {
+		t.Errorf("GetItems ids = %v, want the 3 unique parents %v", got, wantIDs)
+	}
+	dataReq, _ := log.last(t, demosGetItemsPath)["data_request"].(map[string]any)
+	if dataReq == nil || dataReq["include_tag_count"] == nil {
+		t.Errorf("GetItems data_request must ask for tag counts, got %v", dataReq)
+	}
+}
+
+// TestDemosParentTagsUnresolvableParentIsEmpty: a demo whose parent_appid is 0
+// and one whose parent is hidden (success:15, visible:false) both yield rows
+// with no parent_name and null parent_tags, while the resolvable rows stay
+// populated. No error, exit 0.
+func TestDemosParentTagsUnresolvableParentIsEmpty(t *testing.T) {
+	demosIsolateEnv(t)
+	log := newDemosReqLog()
+	const hiddenParent = int64(1245690)
+	items := []string{
+		demoItemJSON(1001, "Demo No Parent", 0),
+		demoItemJSON(1002, "Demo Hidden Parent", hiddenParent),
+		demoItemJSON(1003, "Demo Fine A", 201),
+		demoItemJSON(1004, "Demo Fine B", 202),
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := log.record(r)
+		switch r.URL.Path {
+		case demosQueryPath:
+			fmt.Fprint(w, storeResponse(4, 0, 4, items))
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
+		case demosGetItemsPath:
+			ids := getItemsIDs(t, p)
+			parts := make([]string, 0, len(ids))
+			for _, id := range ids {
+				if id == hiddenParent {
+					parts = append(parts, hiddenItemJSON(hiddenParent))
+					continue
+				}
+				parts = append(parts, parentItemJSON(id, fmt.Sprintf("Full game %d", id), `{"tagid":1716,"weight":1}`))
+			}
+			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	withSteamHook(t, srv)
+
+	env, _, err := runDemosCmd(t, "--limit", "20")
+	if err != nil {
+		t.Fatalf("unresolvable parents must not fail the command: %v", err)
+	}
+	results, _ := env["results"].([]any)
+	if len(results) != 4 {
+		t.Fatalf("results = %d, want 4", len(results))
+	}
+	for i, row := range []map[string]any{results[0].(map[string]any), results[1].(map[string]any)} {
+		if row["parent_tags"] != nil {
+			t.Errorf("results[%d].parent_tags = %v, want null when the parent cannot be resolved", i, row["parent_tags"])
+		}
+		if _, ok := row["parent_name"]; ok {
+			t.Errorf("results[%d].parent_name must be absent when the parent cannot be resolved, got %v", i, row["parent_name"])
+		}
+	}
+	for i := 2; i < 4; i++ {
+		row := results[i].(map[string]any)
+		if got, _ := row["parent_tags"].([]any); !reflect.DeepEqual(got, []any{"Roguelike"}) {
+			t.Errorf("results[%d].parent_tags = %v, want [Roguelike]", i, row["parent_tags"])
+		}
+		if row["parent_name"] == nil {
+			t.Errorf("results[%d].parent_name missing, want the resolved full-game name", i)
+		}
+	}
+}
+
+// TestDemosParentTagsSurviveCompact: parent_tags is sparse (one resolvable row
+// out of five), so the 80% frequency rule in the --agent/--compact projector
+// would drop it without the always-keep allowance.
+func TestDemosParentTagsSurviveCompact(t *testing.T) {
+	demosIsolateEnv(t)
+	log := newDemosReqLog()
+	items := []string{
+		demoItemJSON(1001, "Demo A", 101),
+		demoItemJSON(1002, "Demo B", 0),
+		demoItemJSON(1003, "Demo C", 0),
+		demoItemJSON(1004, "Demo D", 0),
+		demoItemJSON(1005, "Demo E", 0),
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := log.record(r)
+		switch r.URL.Path {
+		case demosQueryPath:
+			fmt.Fprint(w, storeResponse(5, 0, 5, items))
+		case demosGetTagListPath:
+			fmt.Fprint(w, demosTagListJSON)
+		case demosGetItemsPath:
+			ids := getItemsIDs(t, p)
+			parts := make([]string, 0, len(ids))
+			for _, id := range ids {
+				parts = append(parts, parentItemJSON(id, fmt.Sprintf("Full game %d", id), `{"tagid":1716,"weight":1}`))
+			}
+			fmt.Fprintf(w, `{"response":{"store_items":[%s]}}`, strings.Join(parts, ","))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	withSteamHook(t, srv)
+
+	env := runDemosAgentCmd(t, "--limit", "20")
+	results, _ := env["results"].([]any)
+	if len(results) != 5 {
+		t.Fatalf("results = %d, want 5", len(results))
+	}
+	first := results[0].(map[string]any)
+	if got, _ := first["parent_tags"].([]any); !reflect.DeepEqual(got, []any{"Roguelike"}) {
+		t.Errorf("compact row parent_tags = %v, want [Roguelike] (dropped by compaction?)", first["parent_tags"])
+	}
+}
